@@ -1,0 +1,67 @@
+{
+  "naziv": "Frizerski salon Ana",
+  "slug": "salon-ana",
+  "vrsta_djelatnosti": "beauty",
+  "vremenska_zona": "Europe/Sarajevo",
+  "jezik": "bs",
+  "pozdravna_poruka": "Dobro došli u salon Ana! Kako vam možemo pomoći?",
+
+  "meta": {
+    "waba_id": "1744676103334360",
+    "phone_number_id": "PROMIJENI-ME",
+    "broj": "+387 61 000 000"
+  },
+
+  "lokacija": {
+    "naziv": "Salon centar",
+    "adresa": "Ferhadija 1, Sarajevo"
+  },
+
+  "radno_vrijeme": {
+    "dani": [1, 2, 3, 4, 5, 6],
+    "od": "09:00",
+    "do": "20:00"
+  },
+
+  "politika": {
+    "auto_potvrda": false,
+    "hold_minuta": 15,
+    "min_najava_minuta": 60,
+    "max_najava_dana": 90,
+    "otkaz_najava_minuta": 720,
+    "obavezna_polja": ["customer_name"]
+  },
+
+  "usluge": [
+    {
+      "naziv": "Šišanje",
+      "opis": "Klasično šišanje i fen frizura.",
+      "booking_model": "appointment",
+      "trajanje_minuta": 45,
+      "treba_zaposlenika": true
+    },
+    {
+      "naziv": "Farbanje",
+      "opis": "Farbanje kose sa pranjem i njegom.",
+      "booking_model": "appointment",
+      "trajanje_minuta": 120,
+      "treba_zaposlenika": true
+    }
+  ],
+
+  "zaposlenici": [
+    { "ime": "Ana", "uloga": "Frizer" },
+    { "ime": "Maja", "uloga": "Frizer" }
+  ],
+
+  "pitanja": [
+    {
+      "pitanje": "Koje je radno vrijeme?",
+      "odgovor": "Radimo od ponedjeljka do subote, od 09:00 do 20:00."
+    },
+    {
+      "pitanje": "Da li se može platiti karticom?",
+      "odgovor": "Da, primamo gotovinu i kartice."
+    }
+  ]
+}

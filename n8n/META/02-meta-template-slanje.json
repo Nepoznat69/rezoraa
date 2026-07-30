@@ -1,0 +1,70 @@
+{
+  "name": "META - Slanje odobrene template poruke",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const incomingKey = $json.headers?.['x-internal-api-key'];\nif (!incomingKey || incomingKey !== $env.CORE_INTERNAL_API_KEY) throw new Error('Template zahtjev nije autorizovan.');\nreturn [{ json: $json.body ?? $json }];"
+      },
+      "id": "44444444-4444-4444-8444-444444444445",
+      "name": "Provjeri interni ključ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rezora-meta-template",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "44444444-4444-4444-8444-444444444441",
+      "name": "Interni template zahtjev",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CORE_API_URL + '/api/v1/internal/meta/send-template' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Internal-Api-Key", "value": "={{ $env.CORE_INTERNAL_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body ?? $json }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "44444444-4444-4444-8444-444444444442",
+      "name": "Pošalji preko Meta API-ja",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "44444444-4444-4444-8444-444444444443",
+      "name": "Vrati rezultat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [760, 0]
+    }
+  ],
+  "connections": {
+    "Interni template zahtjev": { "main": [[{ "node": "Provjeri interni ključ", "type": "main", "index": 0 }]] },
+    "Provjeri interni ključ": { "main": [[{ "node": "Pošalji preko Meta API-ja", "type": "main", "index": 0 }]] },
+    "Pošalji preko Meta API-ja": { "main": [[{ "node": "Vrati rezultat", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "44444444-4444-4444-8444-444444444444",
+  "tags": []
+}

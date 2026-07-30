@@ -1,0 +1,48 @@
+{
+  "name": "rezora-univerzalni-whatsapp-agent",
+  "version": "2.0.0",
+  "description": "Univerzalna multi-tenant WhatsApp AI i booking platforma sa QR i Meta Cloud kanalima.",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:server": "tsx watch src/server.ts",
+    "dev:qr": "tsx src/qr-agent.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "start:server": "node dist/server.js",
+    "start:qr": "node dist/qr-agent.js",
+    "tunel": "node scripts/tunel.mjs",
+    "klijent:dodaj": "tsx src/cli/dodaj-klijenta.ts",
+    "db:migrate": "tsx src/cli/migrate.ts",
+    "db:seed": "tsx src/cli/seed.ts",
+    "test": "vitest run tests",
+    "test:watch": "vitest tests",
+    "check": "npm run build && npm test"
+  },
+  "keywords": ["whatsapp", "booking", "n8n", "multi-tenant", "meta-cloud-api"],
+  "author": "Rezora",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "fastify": "^5.6.2",
+    "fastify-raw-body": "^5.0.0",
+    "luxon": "^3.7.2",
+    "openai": "^6.46.0",
+    "pg": "^8.16.3",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.7",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.6",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}

@@ -1,0 +1,436 @@
+{
+  "name": "LEGACY - restoran - NE KORISTITI",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-qr",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "85272888-4017-4508-b9a3-adbfbc4d9bca",
+      "name": "Webhook",
+      "webhookId": "4ddc5567-3f10-4e81-b57d-89153a3739bb"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"reply\": $json.output } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        944,
+        0
+      ],
+      "id": "47e6a400-42e4-4fab-8daa-727c2d717e5c",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.message }}",
+        "options": {
+          "systemMessage": "Ti si univerzalni booking asistent i ekstraktor podataka.\n\nAnaliziraj trenutnu poruku korisnika i prethodni razgovor iz memorije. Vrati podatke isključivo prema strukturi Structured Output Parsera.\n\nDozvoljene vrijednosti za intent su:\n- new_booking\n- check_availability\n- reschedule_booking\n- cancel_booking\n- human_handoff\n- general_question\n\nPravila:\n\n1. Nikada ne izmišljaj podatke koje korisnik nije naveo.\n2. Zapamti podatke iz prethodnih poruka i nemoj ponovo pitati ono što već znaš.\n3. Datum uvijek vrati u formatu YYYY-MM-DD.\n4. Vrijeme uvijek vrati u formatu HH:mm.\n5. Ako podatak nije poznat:\n- tekstualno polje vrati kao \"\"\n- party_size vrati kao 0\n6. Za trenutni test rezervacije obavezni podaci su:\n- name\n- date\n- time\n- party_size\n7. U missing_fields navedi samo obavezne podatke koji još nedostaju.\n8. ready_for_availability_check postavi na true samo kada su svi obavezni podaci poznati.\n9. Ako neki podatak nedostaje, u reply postavi jedno kratko i jasno pitanje samo za taj podatak.\n10. Kada su svi podaci prikupljeni, u reply napiši:\n\"Trenutno provjeravam dostupnost traženog termina.\"\n11. Nikada nemoj reći da je rezervacija potvrđena ili zaprimljena prije nego što n8n provjeri dostupnost i upiše je u bazu.\n12. Ako korisnik traži otkazivanje ili promjenu termina, nemoj to tretirati kao novu rezervaciju.\n13. Odgovaraj na bosanskom jeziku, kratko i prirodno.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "8545cbe6-6bfa-4a78-a4cf-961f6459f7f9",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        256,
+        480
+      ],
+      "id": "f70af4a4-8d82-4aed-9c4c-3d69ba86e4cb",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "xrjiwMSoxWW65v25",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.body.from }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        304,
+        224
+      ],
+      "id": "d151b55f-e0d1-4744-b50f-35486914448e",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1MuFEEKVFrcFvKxkQFOz_hEZ1PyAZI25YQplylafGBiE",
+          "mode": "list",
+          "cachedResultName": "Rezora Reservations",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1MuFEEKVFrcFvKxkQFOz_hEZ1PyAZI25YQplylafGBiE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1MuFEEKVFrcFvKxkQFOz_hEZ1PyAZI25YQplylafGBiE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "== {{ $now.toMillis() }}",
+            "created_at": "== {{ $now }}",
+            "updated_at": "== {{ $now }}",
+            "phone": "== {{ $('Webhook').item.json.body.from }}",
+            "name": "== {{ $fromAI(\"name\", \"Ime gosta za rezervaciju\") }}",
+            "date": "={{ $fromAI(\"date\", \"Datum rezervacije\") }}",
+            "time": "== {{ $fromAI(\"time\", \"Vrijeme rezervacije\") }}",
+            "people": "== {{ $fromAI(\"people\", \"Broj osoba\") }}",
+            "notes": "== {{ $fromAI(\"notes\", \"Napomena gosta ako postoji\") }}",
+            "status": "pending",
+            "confirmation_sent": "no",
+            "source": "whatsapp",
+            "last_message": "== {{ $('Webhook').item.json.body.message }}",
+            "ai_summary": "== {{ $fromAI(\"ai_summary\", \"Kratak sažetak rezervacije za osoblje\") }}",
+            "human_handoff": "no",
+            "reschedule_requested": "no",
+            "cancel_requested": "no"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "time",
+              "displayName": "time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "people",
+              "displayName": "people",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confirmation_sent",
+              "displayName": "confirmation_sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_message",
+              "displayName": "last_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_summary",
+              "displayName": "ai_summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "human_handoff",
+              "displayName": "human_handoff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reschedule_requested",
+              "displayName": "reschedule_requested",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cancel_requested",
+              "displayName": "cancel_requested",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        848,
+        352
+      ],
+      "id": "b3252448-1c6d-46cf-a71e-24127f527ef4",
+      "name": "Append row in sheet in Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "segbqAAquCvlyMn3",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n\"intent\": \"new_booking\",\n\"name\": \"\",\n\"date\": \"\",\n\"time\": \"\",\n\"party_size\": 0,\n\"service\": \"\",\n\"resource\": \"\",\n\"notes\": \"\",\n\"booking_id\": \"\",\n\"missing_fields\": [\"name\", \"date\", \"time\"],\n\"ready_for_availability_check\": false,\n\"reply\": \"Molim vas navedite podatak koji nedostaje.\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        672,
+        304
+      ],
+      "id": "d9a25f2c-372a-4d88-aef5-9825f41b5fa1",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        560,
+        0
+      ],
+      "id": "1108f44a-9845-4d7b-8333-aff914213806",
+      "name": "Basic LLM Chain"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        []
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet in Google Sheets": {
+      "ai_tool": [
+        []
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "188177cb-72e1-4b52-942a-8c21a73bf5c4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "65f81ae15d0bdf445105f12275b2e0d16925e49ef451bd6c015b02695c496dcf"
+  },
+  "nodeGroups": [],
+  "id": "ZaD5P4f8SuLWWWDn",
+  "tags": []
+}

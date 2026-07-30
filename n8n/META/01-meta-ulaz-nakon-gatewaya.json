@@ -1,0 +1,70 @@
+{
+  "name": "META - Ulaz nakon sigurnog gatewaya",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const incomingKey = $json.headers?.['x-internal-api-key'];\nif (!incomingKey || incomingKey !== $env.CORE_INTERNAL_API_KEY) throw new Error('Meta gateway nije autorizovan.');\nreturn [{ json: $json.body ?? $json }];"
+      },
+      "id": "33333333-3333-4333-8333-333333333335",
+      "name": "Provjeri gateway ključ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rezora-meta-ulaz",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "33333333-3333-4333-8333-333333333331",
+      "name": "Meta interni webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_CORE_ORCHESTRATOR_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Internal-Api-Key", "value": "={{ $env.CORE_INTERNAL_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body ?? $json }}",
+        "options": { "timeout": 70000 }
+      },
+      "id": "33333333-3333-4333-8333-333333333332",
+      "name": "Zajednička obrada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Vrati gatewayu",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [760, 0]
+    }
+  ],
+  "connections": {
+    "Meta interni webhook": { "main": [[{ "node": "Provjeri gateway ključ", "type": "main", "index": 0 }]] },
+    "Provjeri gateway ključ": { "main": [[{ "node": "Zajednička obrada", "type": "main", "index": 0 }]] },
+    "Zajednička obrada": { "main": [[{ "node": "Vrati gatewayu", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "33333333-3333-4333-8333-333333333334",
+  "tags": []
+}
