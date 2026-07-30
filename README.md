@@ -143,6 +143,18 @@ Business Settings, a može i preko Graph API-ja
 (`POST /{system-user-id}/access_tokens` uz `appsecret_proof`). Token dobiven iz
 App Dashboarda traje samo 24 sata i nije za trajan rad.
 
+## Produkcija
+
+```powershell
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Podiže aplikaciju, PostgreSQL i Caddy koji sam pribavlja HTTPS certifikat. Baza
+u toj postavci **nije** otvorena prema internetu — dostupna je samo aplikaciji.
+
+Cijeli postupak postavljanja servera opisan je u
+[docs/ISPORUKA-NA-SERVER.md](docs/ISPORUKA-NA-SERVER.md).
+
 ### Interni dashboard
 
 ```text

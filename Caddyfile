@@ -1,0 +1,27 @@
+# Caddy sam pribavlja i obnavlja Let's Encrypt certifikat za DOMENA iz .env.
+# Meta ne prihvata webhook bez ispravnog HTTPS-a, pa je ovo obavezan dio.
+
+{$DOMENA} {
+	encode gzip
+
+	# Dashboard je interni alat; ne treba ga u rezultatima pretrage.
+	header /dashboard* -Server
+	header /dashboard* X-Robots-Tag "noindex, nofollow"
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy app:3001 {
+		health_uri /health/live
+		health_interval 30s
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,69 @@
+# Produkcijsko pokretanje na serveru.
+#
+# Razlike u odnosu na razvojni docker-compose.yml:
+#   - baza NIJE otvorena prema internetu, dostupna je samo aplikaciji;
+#   - lozinke i tajne dolaze iz .env, ništa nije upisano u ovaj fajl;
+#   - Caddy sam pribavlja i obnavlja HTTPS certifikat;
+#   - sve se samo diže nakon pada ili restarta servera.
+#
+# Pokretanje:  docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: rezora-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rezora}
+      POSTGRES_USER: ${POSTGRES_USER:-rezora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD mora biti postavljen u .env}
+      TZ: Europe/Sarajevo
+    # Namjerno bez "ports": baza je dostupna samo unutar Docker mreže.
+    volumes:
+      - rezora_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-rezora} -d ${POSTGRES_DB:-rezora}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [rezora]
+
+  app:
+    build: .
+    container_name: rezora-app
+    restart: always
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rezora}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-rezora}
+      TZ: Europe/Sarajevo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [rezora]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: rezora-caddy
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMENA: ${DOMENA:?DOMENA mora biti postavljena u .env, npr. api.rezora.xyz}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    networks: [rezora]
+
+volumes:
+  rezora_postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  rezora:

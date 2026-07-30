@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.env
+.env.*
+!.env.example
+.wwebjs_auth
+.wwebjs_cache
+klijenti/*.json
+!klijenti/primjer.json
+*.log
+tmp
+backups
+docs
+n8n
+tests

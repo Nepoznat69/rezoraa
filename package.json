@@ -17,6 +17,8 @@
     "klijent:dodaj": "tsx src/cli/dodaj-klijenta.ts",
     "db:migrate": "tsx src/cli/migrate.ts",
     "db:seed": "tsx src/cli/seed.ts",
+    "db:migrate:prod": "node dist/cli/migrate.js",
+    "db:seed:prod": "node dist/cli/seed.js",
     "test": "vitest run tests",
     "test:watch": "vitest tests",
     "check": "npm run build && npm test"
