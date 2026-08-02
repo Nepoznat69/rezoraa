@@ -48,6 +48,12 @@ const ConfigSchema = z.object({
   DASHBOARD_PASSWORD: optionalText,
   // Javna adresa platforme; koristi se da dashboard ispiše tačan webhook URL.
   PUBLIC_BASE_URL: optionalText,
+  // Osnovna adresa Rezora Corea (bez završne kose crte). Interni API živi na
+  // {CORE_BASE_URL}/api/internal. Opciono u shemi jer gateway mora startati i
+  // bez bookinga; core-klijent baca jasnu grešku tek kad ga neko pozove.
+  CORE_BASE_URL: optionalText,
+  // Zajednička tajna za x-internal-key. Ista vrijednost mora stajati u Coreu.
+  CORE_INTERNAL_API_KEY: optionalText,
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
