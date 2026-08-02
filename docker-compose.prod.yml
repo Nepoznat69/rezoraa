@@ -80,3 +80,6 @@ volumes:
 
 networks:
   rezora:
+    # Supabase objavljuje direktnu adresu baze SAMO preko IPv6. Bez ovoga
+    # kontejner razriješi ime, ali do njega ne može doći.
+    enable_ipv6: true
