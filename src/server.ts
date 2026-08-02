@@ -149,6 +149,70 @@ app.post('/api/v1/internal/meta/send-template', async (request, reply) => {
   return reply.send({ poslano: true, external_message_id: externalId });
 });
 
+// ---------------------------------------------------------------------------
+// Gateway za Rezora Core
+//
+// Core je sistem evidencije za termine; ovdje se samo šalju poruke. Namjerno se
+// adresira preko WhatsApp broja pošiljaoca, a ne preko internog channel_id, da
+// Core ne mora poznavati rezorine identifikatore.
+// ---------------------------------------------------------------------------
+
+// Pošiljalac se adresira Meta Phone Number ID-jem, jer Core tu vrijednost već
+// čuva u konfiguraciji integracije. Broj u međunarodnom obliku je prihvaćen kao
+// zamjena, radi lakšeg ručnog testiranja.
+const GatewaySendSchema = z.object({
+  from_phone_number_id: z.string().regex(/^\d+$/).optional(),
+  from: z.string().min(6).max(30).optional(),
+  to: z.string().min(6).max(30),
+  text: z.string().min(1).max(4096),
+});
+
+function samoCifre(broj: string): string {
+  return broj.replace(/\D/g, '');
+}
+
+app.post('/api/v1/gateway/send', async (request, reply) => {
+  if (!internalAuthorized(request.headers['x-internal-api-key'])) {
+    return reply.code(401).send({ message: 'Poziv nije autorizovan.' });
+  }
+  const body = GatewaySendSchema.parse(request.body);
+  if (!body.from_phone_number_id && !body.from) {
+    return reply.code(400).send({ message: 'Nedostaje from_phone_number_id ili from.' });
+  }
+
+  const kanali = body.from_phone_number_id
+    ? await query<{ id: string }>(
+        `SELECT id FROM channels
+          WHERE type = 'whatsapp_cloud' AND status = 'active'
+            AND external_phone_number_id = $1`,
+        [body.from_phone_number_id],
+      )
+    : await query<{ id: string }>(
+        `SELECT id FROM channels
+          WHERE type = 'whatsapp_cloud' AND status = 'active'
+            AND regexp_replace(phone_number, '\\D', '', 'g') = $1`,
+        [samoCifre(body.from ?? '')],
+      );
+
+  const kanal = kanali[0];
+  if (!kanal) {
+    logger.warn('Gateway: nepoznat pošiljalac.', {
+      po_id: Boolean(body.from_phone_number_id),
+    });
+    return reply.code(404).send({ message: 'Pošiljalac nije poznat ovoj platformi.' });
+  }
+
+  try {
+    const externalId = await meta.sendText(kanal.id, samoCifre(body.to), body.text);
+    logger.info('Gateway je poslao poruku.', { channel_id: kanal.id });
+    return reply.send({ poslano: true, external_message_id: externalId });
+  } catch (error) {
+    const poruka = error instanceof Error ? error.message : String(error);
+    logger.error('Gateway slanje nije uspjelo.', { channel_id: kanal.id, greska: poruka });
+    return reply.code(502).send({ poslano: false, message: poruka });
+  }
+});
+
 const MetaOnboardingSchema = z.object({
   state: z.string().min(32).max(128),
   code: z.string().min(20).max(4096),
