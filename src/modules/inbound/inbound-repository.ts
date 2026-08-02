@@ -5,8 +5,8 @@
  * gatewaya (isporuka, ponovni pokušaji, redoslijed po sagovorniku), a ne
  * poslovni podatak. Poslovni podaci su u Rezora Coreu.
  *
- * Kolona se istorijski zove `tenant_id`, ali u njoj od prelaska na Core stoji
- * `business_id` iz Corea. Ime kolone se ne dira jer se lokalne migracije ne
+ * Kolona `business_id` nosi identifikator biznisa iz Rezora Corea; gateway
+ * nema vlastite tenante (migracija 004).
  * mijenjaju; jedino mjesto koje o toj razlici mora znati je ovaj fajl.
  */
 
@@ -23,12 +23,12 @@ export class InboundRepository {
   async enqueue(message: NormalizedMessage): Promise<boolean> {
     const rows = await query<{ id: string }>(
       `INSERT INTO inbound_events (
-         tenant_id, channel_id, event_id, external_customer_id, payload
+         business_id, channel_id, event_id, external_customer_id, payload
        ) VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (tenant_id, channel_id, event_id) DO NOTHING
+       ON CONFLICT (business_id, channel_id, event_id) DO NOTHING
        RETURNING id`,
       [
-        // business_id iz Corea u istoimenu (istorijski nazvanu) kolonu.
+
         message.business_id,
         message.channel_id,
         message.event_id,
@@ -50,7 +50,7 @@ export class InboundRepository {
               AND current.attempts < 8
               AND NOT EXISTS (
                 SELECT 1 FROM inbound_events older
-                 WHERE older.tenant_id = current.tenant_id
+                 WHERE older.business_id = current.business_id
                    AND older.channel_id = current.channel_id
                    AND older.external_customer_id = current.external_customer_id
                    AND older.status IN ('received', 'processing', 'failed')

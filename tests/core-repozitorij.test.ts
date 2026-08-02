@@ -10,9 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   azurirajStatusPoruke,
   businessIdZaBroj,
+  historijaRazgovora,
   nadjiIliNapraviRazgovor,
   postaviCoreIzvrsilac,
   preuzeoCovjek,
+  stanjeRazgovora,
   zapisiDolaznuPoruku,
   zapisiOdlaznuPoruku,
   type IzvrsilacUpita,
@@ -253,6 +255,121 @@ describe('preuzeoCovjek', () => {
   });
 });
 
+describe('stanjeRazgovora', () => {
+  it('čita razgovor isključivo unutar svog biznisa', async () => {
+    odgovori = [
+      [{ id: RAZGOVOR, status: 'bot', contact_name: 'Amra', client_id: null }],
+    ];
+    await expect(stanjeRazgovora(BIZNIS, RAZGOVOR)).resolves.toEqual({
+      id: RAZGOVOR,
+      status: 'bot',
+      contactName: 'Amra',
+      clientId: null,
+    });
+
+    expect(upiti).toHaveLength(1);
+    expect(upiti[0].tekst).toContain('FROM public.conversations');
+    expect(upiti[0].tekst).toContain('WHERE business_id = $1');
+    expect(upiti[0].tekst).toContain('AND id = $2');
+    expect(upiti[0].vrijednosti).toEqual([BIZNIS, RAZGOVOR]);
+  });
+
+  it('prepoznaje da je čovjek preuzeo razgovor', async () => {
+    odgovori = [[{ id: RAZGOVOR, status: 'human', contact_name: null, client_id: null }]];
+    const stanje = await stanjeRazgovora(BIZNIS, RAZGOVOR);
+    expect(stanje?.status).toBe('human');
+  });
+
+  it('prepoznaje zatvoren razgovor', async () => {
+    odgovori = [[{ id: RAZGOVOR, status: 'closed', contact_name: null, client_id: null }]];
+    const stanje = await stanjeRazgovora(BIZNIS, RAZGOVOR);
+    expect(stanje?.status).toBe('closed');
+  });
+
+  it('nepoznat status svodi na bot, da asistent ne zanijemi bez razloga', async () => {
+    odgovori = [[{ id: RAZGOVOR, status: 'nesto-novo', contact_name: null, client_id: null }]];
+    const stanje = await stanjeRazgovora(BIZNIS, RAZGOVOR);
+    expect(stanje?.status).toBe('bot');
+  });
+
+  it('vraća null kada razgovor ne pripada tom biznisu', async () => {
+    odgovori = [[]];
+    await expect(stanjeRazgovora(BIZNIS, RAZGOVOR)).resolves.toBeNull();
+  });
+
+  it('ne ide u bazu bez ispravnog business_id-a ni conversation_id-a', async () => {
+    await expect(stanjeRazgovora('', RAZGOVOR)).rejects.toThrow(/business_id/i);
+    await expect(stanjeRazgovora(BIZNIS, 'nije-uuid')).rejects.toThrow(/conversationId/i);
+    expect(upiti).toHaveLength(0);
+  });
+});
+
+describe('historijaRazgovora', () => {
+  it('čita poruke samo tog biznisa i tog razgovora', async () => {
+    odgovori = [[{ direction: 'inbound', body: TAJNI_TEKST }]];
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 10);
+
+    expect(upiti[0].tekst).toContain('FROM public.messages');
+    expect(upiti[0].tekst).toContain('WHERE business_id = $1');
+    expect(upiti[0].tekst).toContain('AND conversation_id = $2');
+    expect(upiti[0].vrijednosti).toEqual([BIZNIS, RAZGOVOR, 10]);
+  });
+
+  it('vraća poruke od najstarije prema najnovijoj', async () => {
+    // Upit ide DESC (zadnjih N), pa modul mora okrenuti redoslijed.
+    odgovori = [
+      [
+        { direction: 'inbound', body: 'treca' },
+        { direction: 'outbound', body: 'druga' },
+        { direction: 'inbound', body: 'prva' },
+      ],
+    ];
+    await expect(historijaRazgovora(BIZNIS, RAZGOVOR)).resolves.toEqual([
+      { direction: 'inbound', body: 'prva' },
+      { direction: 'outbound', body: 'druga' },
+      { direction: 'inbound', body: 'treca' },
+    ]);
+  });
+
+  it('ograničenje ide kao parametar $3, nikad spojeno u SQL', async () => {
+    odgovori = [[]];
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 7);
+
+    expect(upiti[0].tekst).toContain('LIMIT $3');
+    expect(upiti[0].tekst).not.toMatch(/LIMIT\s+\d/);
+    expect(upiti[0].vrijednosti[2]).toBe(7);
+  });
+
+  it('svodi besmislen limit u razuman raspon umjesto da povuče cijelu tabelu', async () => {
+    odgovori = [[], [], []];
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 0);
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 5000);
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 4.7);
+
+    expect(upiti[0].vrijednosti[2]).toBe(1);
+    expect(upiti[1].vrijednosti[2]).toBe(50);
+    expect(upiti[2].vrijednosti[2]).toBe(4);
+  });
+
+  it('nepoznat smjer čita kao dolazni, a prazan sadržaj kao prazan string', async () => {
+    odgovori = [[{ direction: 'nesto', body: null }]];
+    await expect(historijaRazgovora(BIZNIS, RAZGOVOR)).resolves.toEqual([
+      { direction: 'inbound', body: '' },
+    ]);
+  });
+
+  it('prazan razgovor je prazna istorija, ne greška', async () => {
+    odgovori = [[]];
+    await expect(historijaRazgovora(BIZNIS, RAZGOVOR)).resolves.toEqual([]);
+  });
+
+  it('ne ide u bazu bez ispravnog business_id-a ni conversation_id-a', async () => {
+    await expect(historijaRazgovora('', RAZGOVOR)).rejects.toThrow(/business_id/i);
+    await expect(historijaRazgovora(BIZNIS, 'nije-uuid')).rejects.toThrow(/conversationId/i);
+    expect(upiti).toHaveLength(0);
+  });
+});
+
 describe('disciplina business_id-a kroz cijeli modul', () => {
   async function pokreniSve(): Promise<void> {
     odgovori = [
@@ -264,6 +381,8 @@ describe('disciplina business_id-a kroz cijeli modul', () => {
       [], // odlazna poruka (last_message_at)
       [{ id: 'poruka-2' }], // azurirajStatusPoruke
       [{ id: RAZGOVOR }], // preuzeoCovjek
+      [{ id: RAZGOVOR, status: 'human', contact_name: 'Amra', client_id: null }], // stanjeRazgovora
+      [{ direction: 'inbound', body: TAJNI_TEKST }], // historijaRazgovora
     ];
     await businessIdZaBroj('123456789');
     await nadjiIliNapraviRazgovor(BIZNIS, KONTAKT, 'Amra');
@@ -281,6 +400,8 @@ describe('disciplina business_id-a kroz cijeli modul', () => {
     });
     await azurirajStatusPoruke(BIZNIS, VANJSKI_ID, 'delivered');
     await preuzeoCovjek(BIZNIS, RAZGOVOR);
+    await stanjeRazgovora(BIZNIS, RAZGOVOR);
+    await historijaRazgovora(BIZNIS, RAZGOVOR, 11);
   }
 
   it('svaki upit osim razrješavanja broja ima business_id filter na $1', async () => {
