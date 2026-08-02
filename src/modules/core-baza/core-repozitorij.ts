@@ -399,3 +399,81 @@ export async function preuzeoCovjek(businessId: string, conversationId: string):
   }
   return redovi.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// 7. Čitanje razgovora
+//
+// Bez ovoga asistent nema pamćenje: svaka poruka bi mu izgledala kao prva, pa
+// bi iznova pitao ono što je kupac već rekao. Bez statusa bi nastavio
+// odgovarati i nakon što razgovor preuzme čovjek.
+// ---------------------------------------------------------------------------
+
+export interface StanjeRazgovora {
+  id: string;
+  status: 'bot' | 'human' | 'closed';
+  contactName: string | null;
+  clientId: string | null;
+}
+
+/** Vraća stanje razgovora ili null ako ne pripada tom biznisu. */
+export async function stanjeRazgovora(
+  businessId: string,
+  conversationId: string,
+): Promise<StanjeRazgovora | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  const redovi = await upit<{
+    id: string;
+    status: string;
+    contact_name: string | null;
+    client_id: string | null;
+  }>(
+    `SELECT id, status, contact_name, client_id
+       FROM public.conversations
+      WHERE business_id = $1 AND id = $2
+      LIMIT 1`,
+    [biznis, razgovor],
+  );
+
+  const red = redovi[0];
+  if (!red) return null;
+
+  const status = red.status === 'human' || red.status === 'closed' ? red.status : 'bot';
+  return { id: red.id, status, contactName: red.contact_name, clientId: red.client_id };
+}
+
+export interface PorukaIzHistorije {
+  direction: 'inbound' | 'outbound';
+  body: string;
+}
+
+/**
+ * Zadnjih `koliko` poruka razgovora, poredanih od najstarije prema najnovijoj —
+ * u redoslijedu u kojem ih AI sloj očekuje.
+ */
+export async function historijaRazgovora(
+  businessId: string,
+  conversationId: string,
+  koliko = 10,
+): Promise<PorukaIzHistorije[]> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+  const granica = Math.min(Math.max(Math.trunc(koliko), 1), 50);
+
+  const redovi = await upit<{ direction: string; body: string }>(
+    `SELECT direction, body
+       FROM public.messages
+      WHERE business_id = $1 AND conversation_id = $2
+      ORDER BY created_at DESC
+      LIMIT $3`,
+    [biznis, razgovor, granica],
+  );
+
+  return redovi
+    .map((r) => ({
+      direction: r.direction === 'outbound' ? ('outbound' as const) : ('inbound' as const),
+      body: r.body ?? '',
+    }))
+    .reverse();
+}

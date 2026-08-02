@@ -44,7 +44,11 @@ export type AiExtraction = z.infer<typeof AiExtractionSchema>;
 
 export const NormalizedMessageSchema = z.object({
   event_id: z.string().min(1).max(255),
-  tenant_id: z.string().uuid(),
+  /**
+   * Identifikator biznisa u Rezora Coreu. Core je sistem evidencije; gateway
+   * više nema vlastite tenante, pa ovdje stoji `business_id` iz Corea.
+   */
+  business_id: z.string().uuid(),
   channel_id: z.string().uuid(),
   channel_type: z.enum(['whatsapp_qr', 'whatsapp_cloud']),
   external_message_id: z.string().min(1).max(255),
@@ -60,6 +64,14 @@ export const NormalizedMessageSchema = z.object({
 
 export type NormalizedMessage = z.infer<typeof NormalizedMessageSchema>;
 
+/**
+ * Oblik konteksta koji očekuje AI sloj (src/modules/ai/extractor.ts).
+ *
+ * Naziv je istorijski: gateway više nema tenante, nego biznise iz Rezora Corea.
+ * `tenantId` je danas `business_id` iz Corea, a puni ga
+ * src/modules/core-kontekst/kontekst.ts. Ime polja je namjerno ostavljeno da se
+ * AI sloj ne dira.
+ */
 export interface TenantContext {
   tenantId: string;
   businessName: string;

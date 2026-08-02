@@ -1,5 +1,31 @@
+/**
+ * ============================================================================
+ * Orkestrator razgovora
+ * ============================================================================
+ *
+ * Gateway je KANAL, a ne sistem evidencije. Sve što je poslovni podatak —
+ * termini, usluge, osoblje, razgovori i poruke — živi u Rezora Coreu:
+ *
+ *   * kontekst biznisa:      src/modules/core-kontekst/kontekst.ts
+ *   * termini:               src/modules/core-api/core-klijent.ts (interni API)
+ *   * razgovori i poruke:    src/modules/core-baza/core-repozitorij.ts
+ *
+ * U lokalnoj bazi ostaju samo `inbound_events` (red čekanja) i `channels`
+ * (WhatsApp pristupi samog gatewaya). Zaključavanje razgovora i dalje ide preko
+ * lokalnog Postgresa, jer je i ono osobina reda čekanja, a ne poslovni podatak.
+ *
+ * PRAVILA
+ *   1. `business_id` je izričit u svakom pozivu prema Coreu.
+ *   2. HTTP 409 se NIKAD ne ponavlja; pretvara se u ljudsku rečenicu i, gdje
+ *      ima smisla, u ponudu drugih termina iz VEĆ dohvaćene liste.
+ *   3. Ako Core (API ili baza) nije dostupan, korisnik dobija ljudsku poruku da
+ *      pokušamo kasnije. Nikad tehnička greška i nikad tišina.
+ *   4. U logove ne ide telefon, sadržaj poruke ni ključ — samo identifikatori.
+ * ============================================================================
+ */
+
 import { computeMissingFields, questionForMissingField } from '../../domain/booking-rules.js';
-import { resolveBookingInterval } from '../../domain/date-resolver.js';
+import { resolveBookingInterval, resolveBosnianDate } from '../../domain/date-resolver.js';
 import {
   type AiExtraction,
   type NormalizedMessage,
@@ -7,10 +33,36 @@ import {
   type TenantContext,
 } from '../../domain/schemas.js';
 import { withConversationLock } from '../../infrastructure/database.js';
+import { logger } from '../../lib/logger.js';
 import { AiExtractor } from '../ai/extractor.js';
-import { BookingService, type BookingOperationResult } from '../booking/booking-service.js';
-import { TenantRepository } from '../tenants/tenant-repository.js';
-import { ConversationRepository } from './conversation-repository.js';
+import {
+  napraviTermin,
+  otkaziTermin,
+  pomjeriTermin,
+  slobodniTermini,
+  type SlobodanTermin,
+} from '../core-api/core-klijent.js';
+import {
+  historijaRazgovora,
+  nadjiIliNapraviRazgovor,
+  preuzeoCovjek,
+  stanjeRazgovora,
+  zapisiDolaznuPoruku,
+  zapisiOdlaznuPoruku,
+} from '../core-baza/core-repozitorij.js';
+import { kontekstZaBiznis } from '../core-kontekst/kontekst.js';
+import {
+  PORUKA_CORE_NEDOSTUPAN,
+  PORUKA_NERAZUMIJEVANJE,
+  PORUKA_PREUZEO_COVJEK,
+  PORUKA_TEHNICKI_PROBLEM,
+  ponudaAlternativa,
+  porukaZaOdbijenTermin,
+  porukaZaOdbijenoOtkazivanje,
+  porukaZaPomjerenTermin,
+  porukaZaPotvrdjenTermin,
+  porukaZaZauzetTermin,
+} from './poruke.js';
 
 export interface OrchestrationResult {
   reply: string;
@@ -19,59 +71,26 @@ export interface OrchestrationResult {
   intent: AiExtraction['intent'];
   extraction?: AiExtraction;
   booking?: {
-    code?: string;
-    status?: string;
+    /** UUID termina u Coreu. */
+    appointmentId?: string;
+    /** false = isti `idempotency_key` je već bio obrađen. */
+    created?: boolean;
+    /** Ishod provjere dostupnosti. */
     available?: boolean;
   };
 }
 
-const textSlotKeys: Array<keyof AiExtraction> = [
-  'customer_name',
-  'location',
-  'service',
-  'resource',
-  'employee',
-  'date',
-  'date_expression',
-  'end_date',
-  'start_time',
-  'start_time_expression',
-  'end_time',
-  'room_type',
-  'notes',
-  'booking_id',
-];
+const UUID_OBLIK = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const numberSlotKeys: Array<keyof AiExtraction> = [
-  'duration_minutes',
-  'party_size',
-  'quantity',
-];
+/** Trajanje termina kad usluga nije prepoznata (npr. golo pomjeranje termina). */
+const PODRAZUMIJEVANO_TRAJANJE = 30;
 
-function mergeKnownSlots(extraction: AiExtraction, slots: Record<string, unknown>): AiExtraction {
-  const merged = { ...extraction };
-  for (const key of textSlotKeys) {
-    if (typeof merged[key] === 'string' && merged[key] === '' && typeof slots[key] === 'string') {
-      (merged as Record<string, unknown>)[key] = slots[key];
-    }
-  }
-  for (const key of numberSlotKeys) {
-    if (typeof merged[key] === 'number' && merged[key] === 0 && typeof slots[key] === 'number') {
-      (merged as Record<string, unknown>)[key] = slots[key];
-    }
-  }
-  return merged;
+function jeUuid(vrijednost: string | undefined): vrijednost is string {
+  return typeof vrijednost === 'string' && UUID_OBLIK.test(vrijednost.trim());
 }
 
-function persistentSlots(extraction: AiExtraction): Record<string, unknown> {
-  const slots: Record<string, unknown> = {};
-  for (const key of [...textSlotKeys, ...numberSlotKeys]) {
-    const value = extraction[key];
-    if ((typeof value === 'string' && value) || (typeof value === 'number' && value > 0)) {
-      slots[key] = value;
-    }
-  }
-  return slots;
+function opisGreske(greska: unknown): string {
+  return greska instanceof Error ? greska.message : String(greska);
 }
 
 function normalize(value: string): string {
@@ -82,22 +101,35 @@ function normalize(value: string): string {
     .trim();
 }
 
-function selectService(context: TenantContext, requested: string): TenantContext['services'][number] | null {
+function selectService(
+  context: TenantContext,
+  requested: string,
+): TenantContext['services'][number] | null {
   if (!requested && context.services.length === 1) return context.services[0];
   const wanted = normalize(requested);
   if (!wanted) return null;
   return (
     context.services.find((service) => normalize(service.name) === wanted) ??
-    context.services.find((service) => normalize(service.name).includes(wanted) || wanted.includes(normalize(service.name))) ??
+    context.services.find(
+      (service) =>
+        normalize(service.name).includes(wanted) || wanted.includes(normalize(service.name)),
+    ) ??
     null
   );
 }
 
-function mapService(tenantId: string, service: TenantContext['services'][number], locationId: string | null): ServiceDefinition {
+/**
+ * Coreova usluga u oblik koji traže `booking-rules` i `date-resolver`.
+ * `locationId` ne postoji u internom ugovoru, pa je uvijek `null`.
+ */
+function mapService(
+  tenant: TenantContext,
+  service: TenantContext['services'][number],
+): ServiceDefinition {
   return {
     id: service.id,
-    tenantId,
-    locationId,
+    tenantId: tenant.tenantId,
+    locationId: null,
     name: service.name,
     bookingModel: service.bookingModel,
     defaultDurationMinutes: service.defaultDurationMinutes,
@@ -110,233 +142,456 @@ function mapService(tenantId: string, service: TenantContext['services'][number]
   };
 }
 
-function bookingShape(result: BookingOperationResult): OrchestrationResult['booking'] {
+/** Zamjenska usluga kad je poznato samo vrijeme (pomjeranje bez naziva usluge). */
+function zamjenskaUsluga(tenant: TenantContext): ServiceDefinition {
   return {
-    code: result.bookingCode,
-    status: result.status,
-    available: result.available,
+    id: '',
+    tenantId: tenant.tenantId,
+    locationId: null,
+    name: '',
+    bookingModel: 'appointment',
+    defaultDurationMinutes: PODRAZUMIJEVANO_TRAJANJE,
+    bufferBeforeMinutes: 0,
+    bufferAfterMinutes: 0,
+    requiresEmployee: false,
+    requiresResource: false,
+    capacityMode: 'none',
+    configuration: {},
+  };
+}
+
+/** Zaposlenik kojeg je korisnik imenovao, ako ga uopšte ima u Coreu. */
+function selectEmployee(tenant: TenantContext, requested: string): string | undefined {
+  const wanted = normalize(requested);
+  if (!wanted) return undefined;
+  const employee =
+    tenant.employees.find((kandidat) => normalize(kandidat.name) === wanted) ??
+    tenant.employees.find((kandidat) => normalize(kandidat.name).includes(wanted));
+  return employee?.id;
+}
+
+interface Okvir {
+  businessId: string;
+  conversationId: string;
+  tenant: TenantContext;
+  message: NormalizedMessage;
+  extraction: AiExtraction;
+}
+
+function tiho(intent: AiExtraction['intent'] = 'unknown'): OrchestrationResult {
+  return { reply: '', duplicate: false, handoff: false, intent };
+}
+
+function odgovor(
+  okvir: Okvir,
+  reply: string,
+  dodatno: Partial<OrchestrationResult> = {},
+): OrchestrationResult {
+  return {
+    reply,
+    duplicate: false,
+    handoff: false,
+    intent: okvir.extraction.intent,
+    extraction: okvir.extraction,
+    ...dodatno,
   };
 }
 
 export class ConversationOrchestrator {
-  constructor(
-    private readonly tenants = new TenantRepository(),
-    private readonly conversations = new ConversationRepository(),
-    private readonly ai = new AiExtractor(),
-    private readonly bookings = new BookingService(),
-  ) {}
+  constructor(private readonly ai = new AiExtractor()) {}
 
   async process(message: NormalizedMessage): Promise<OrchestrationResult> {
-    const lockKey = `${message.tenant_id}:${message.channel_id}:${message.customer_external_id}`;
-    return withConversationLock(lockKey, async () => {
-      const prepared = await this.conversations.prepareInbound(message);
-      if (prepared.duplicate) {
-        return { reply: '', duplicate: true, handoff: false, intent: 'unknown' };
-      }
-      if (prepared.status === 'human') {
+    const businessId = typeof message.business_id === 'string' ? message.business_id.trim() : '';
+
+    // Broj koji nije vezan ni za jedan biznis u Coreu: nema kome odgovoriti i
+    // nema gdje zapisati razgovor. Zabilježi i šuti — nikakav odgovor prema
+    // nepoznatom broju nije bolji od pogrešnog.
+    if (!jeUuid(businessId)) {
+      logger.warn('Poruka je stigla bez poznatog biznisa u Coreu — odgovor se ne šalje.', {
+        channel_id: message.channel_id,
+        channel_type: message.channel_type,
+      });
+      return tiho();
+    }
+
+    const lockKey = `${businessId}:${message.channel_id}:${message.customer_external_id}`;
+    return withConversationLock(lockKey, async () => this.uZakljucanomRazgovoru(businessId, message));
+  }
+
+  private async uZakljucanomRazgovoru(
+    businessId: string,
+    message: NormalizedMessage,
+  ): Promise<OrchestrationResult> {
+    let conversationId: string;
+    try {
+      const contactName = message.metadata.contact_name;
+      conversationId = await nadjiIliNapraviRazgovor(
+        businessId,
+        message.customer_phone,
+        typeof contactName === 'string' ? contactName : undefined,
+      );
+      const zapis = await zapisiDolaznuPoruku({
+        businessId,
+        conversationId,
+        externalMessageId: message.external_message_id,
+        tekst: message.text,
+        tipPoruke: message.message_type,
+      });
+      // Meta ponavlja webhookove; na ponovljenu poruku se ne odgovara drugi put.
+      if (zapis.duplikat) return { reply: '', duplicate: true, handoff: false, intent: 'unknown' };
+
+      // Kad je razgovor preuzeo čovjek, asistent mora šutjeti. Poruka je već
+      // zapisana, pa je zaposlenik vidi u Inboxu.
+      const stanje = await stanjeRazgovora(businessId, conversationId);
+      if (stanje && stanje.status !== 'bot') {
         return { reply: '', duplicate: false, handoff: true, intent: 'human_handoff' };
       }
+    } catch (greska) {
+      logger.error('Razgovor nije zapisan u Core bazu.', {
+        business_id: businessId,
+        greska: opisGreske(greska),
+      });
+      return { ...tiho(), reply: PORUKA_TEHNICKI_PROBLEM };
+    }
 
-      const tenant = await this.tenants.getContext(message.tenant_id);
-      let extraction = await this.ai.extract({
+    const rezultat = await this.odgovoriNaPoruku(businessId, conversationId, message);
+
+    if (rezultat.reply) {
+      await zapisiOdlaznuPoruku({ businessId, conversationId, tekst: rezultat.reply }).catch(
+        (greska: unknown) => {
+          // Odgovor je ipak poslan korisniku; propali zapis se samo prijavi.
+          logger.error('Odlazna poruka nije zapisana u Core bazu.', {
+            business_id: businessId,
+            conversation_id: conversationId,
+            greska: opisGreske(greska),
+          });
+        },
+      );
+    }
+    return rezultat;
+  }
+
+  private async odgovoriNaPoruku(
+    businessId: string,
+    conversationId: string,
+    message: NormalizedMessage,
+  ): Promise<OrchestrationResult> {
+    const kontekst = await kontekstZaBiznis(businessId);
+    if (!kontekst.ok) {
+      logger.warn('Kontekst biznisa nije dohvaćen iz Corea.', {
+        business_id: businessId,
+        vrsta: kontekst.vrsta,
+        status: kontekst.status,
+      });
+      return { ...tiho(), reply: PORUKA_CORE_NEDOSTUPAN };
+    }
+    const tenant = kontekst.kontekst;
+
+    // Bez istorije bi svaka poruka izgledala kao prva, pa bi asistent iznova
+    // pitao ono što je kupac već rekao. Zadnja poruka je upravo zapisana, pa se
+    // izostavlja — AI je dobija zasebno kao trenutni unos.
+    let history: Array<{ direction: 'inbound' | 'outbound'; body: string }> = [];
+    try {
+      history = (await historijaRazgovora(businessId, conversationId, 11)).slice(0, -1);
+    } catch (greska) {
+      logger.warn('Istorija razgovora nije dohvaćena; nastavljam bez nje.', {
+        business_id: businessId,
+        conversation_id: conversationId,
+        greska: opisGreske(greska),
+      });
+    }
+
+    let extraction: AiExtraction;
+    try {
+      extraction = await this.ai.extract({
         message: message.text,
         phone: message.customer_phone,
         receivedAt: message.received_at,
         tenant,
-        history: prepared.history.slice(0, -1),
-        knownSlots: prepared.slots,
+        history,
+        knownSlots: {},
       });
-      extraction = mergeKnownSlots(extraction, prepared.slots);
-      await this.conversations.updateCustomerName(message.tenant_id, prepared.customerId, extraction.customer_name);
+    } catch (greska) {
+      logger.error('AI sloj nije vratio razumijevanje poruke.', {
+        business_id: businessId,
+        greska: opisGreske(greska),
+      });
+      return { ...tiho(), reply: PORUKA_TEHNICKI_PROBLEM };
+    }
 
-      let serviceSummary = selectService(tenant, extraction.service || extraction.room_type);
-      let service: ServiceDefinition | null = null;
-      if (serviceSummary) service = await this.tenants.getService(tenant.tenantId, serviceSummary.id);
+    const okvir: Okvir = { businessId, conversationId, tenant, message, extraction };
 
-      if (extraction.intent === 'reschedule_booking' && !service) {
-        const active = await this.bookings.lookupActiveBooking(
-          tenant.tenantId,
-          prepared.customerId,
-          extraction.booking_id,
+    switch (extraction.intent) {
+      case 'human_handoff':
+      case 'complaint':
+        return this.predajCovjeku(okvir);
+
+      case 'general_question':
+        return odgovor(
+          okvir,
+          extraction.reply || 'Molim vas napišite šta vas zanima o našim uslugama.',
         );
-        if (active) {
-          service = await this.tenants.getService(tenant.tenantId, active.serviceId);
-          serviceSummary = tenant.services.find((item) => item.id === active.serviceId) ?? null;
-          extraction.service = service.name;
-          extraction.booking_id = extraction.booking_id || active.bookingCode;
-        }
-      }
 
-      let result: OrchestrationResult;
-      switch (extraction.intent) {
-        case 'human_handoff':
-        case 'complaint': {
-          await this.conversations.openHandoff(
-            tenant.tenantId,
-            prepared.conversationId,
-            extraction.intent === 'complaint' ? 'Žalba korisnika' : 'Korisnik je zatražio zaposlenika',
-          );
-          result = {
-            reply: 'Vašu poruku sam proslijedio zaposleniku. Javit će vam se čim bude dostupan.',
-            duplicate: false,
-            handoff: true,
-            intent: extraction.intent,
-            extraction,
-          };
-          break;
-        }
-        case 'general_question': {
-          result = {
-            reply: extraction.reply || 'Molim vas napišite šta vas zanima o našim uslugama.',
-            duplicate: false,
-            handoff: false,
-            intent: extraction.intent,
-            extraction,
-          };
-          break;
-        }
-        case 'cancel_booking': {
-          const operation = await this.bookings.cancelBooking(
-            tenant,
-            prepared.customerId,
-            extraction.booking_id,
-            message.event_id,
-          );
-          const needsHandoff = operation.reply.includes('zaposlenikom');
-          if (needsHandoff) {
-            await this.conversations.openHandoff(tenant.tenantId, prepared.conversationId, 'Kasno otkazivanje');
-          }
-          result = {
-            reply: operation.reply,
-            duplicate: false,
-            handoff: needsHandoff,
-            intent: extraction.intent,
-            extraction,
-            booking: bookingShape(operation),
-          };
-          break;
-        }
-        case 'confirm_booking': {
-          const operation = await this.bookings.confirmBooking(
-            tenant,
-            prepared.customerId,
-            extraction.booking_id,
-            message.event_id,
-          );
-          result = {
-            reply: operation.reply,
-            duplicate: false,
-            handoff: false,
-            intent: extraction.intent,
-            extraction,
-            booking: bookingShape(operation),
-          };
-          break;
-        }
-        case 'new_booking':
-        case 'check_availability':
-        case 'reschedule_booking': {
-          if (tenant.services.length === 0) {
-            await this.conversations.openHandoff(tenant.tenantId, prepared.conversationId, 'Nema konfigurisanih usluga');
-            result = {
-              reply: 'Usluge još nisu pravilno konfigurisane. Proslijedio sam poruku zaposleniku.',
-              duplicate: false,
-              handoff: true,
-              intent: extraction.intent,
-              extraction,
-            };
-            break;
-          }
+      case 'cancel_booking':
+        return this.otkazi(okvir);
 
-          const missing = computeMissingFields(
-            extraction,
-            service,
-            tenant.services.length,
-            extraction.intent === 'reschedule_booking'
-              ? { ...tenant.bookingPolicy, required_fields: [] }
-              : tenant.bookingPolicy,
-          );
-          extraction.missing_fields = missing;
-          extraction.ready_for_availability_check = missing.length === 0;
-          if (missing.length > 0 || !service) {
-            result = {
-              reply: questionForMissingField(missing[0] ?? 'service'),
-              duplicate: false,
-              handoff: false,
-              intent: extraction.intent,
-              extraction,
-            };
-            break;
-          }
+      case 'check_availability':
+        return this.provjeriDostupnost(okvir);
 
-          if (service.bookingModel === 'service_request') {
-            await this.conversations.openHandoff(tenant.tenantId, prepared.conversationId, 'Novi zahtjev za uslugu');
-            result = {
-              reply: 'Vaš zahtjev je evidentiran i proslijeđen zaposleniku na obradu.',
-              duplicate: false,
-              handoff: true,
-              intent: extraction.intent,
-              extraction,
-            };
-            break;
-          }
+      case 'reschedule_booking':
+        return this.pomjeri(okvir);
 
-          const interval = resolveBookingInterval(extraction, service, message.received_at, tenant.timezone);
-          if (!interval) {
-            result = {
-              reply: 'Nisam mogao pouzdano odrediti datum i vrijeme. Molim vas napišite tačan datum i termin.',
-              duplicate: false,
-              handoff: false,
-              intent: extraction.intent,
-              extraction,
-            };
-            break;
-          }
+      case 'new_booking':
+      // Core ne poznaje odvojenu "potvrdu": termin ili postoji ili ne postoji.
+      // Potvrda sa konkretnim danom i satom je zato obično kreiranje termina, a
+      // ako podaci nedostaju, ista grana ih zatraži.
+      case 'confirm_booking':
+        return this.zakazi(okvir);
 
-          const command = {
-            tenant,
-            customerId: prepared.customerId,
-            service,
-            extraction,
-            interval,
-            idempotencyKey: message.event_id,
-          };
-          let operation: BookingOperationResult;
-          if (extraction.intent === 'check_availability') {
-            operation = await this.bookings.checkAvailability(command);
-          } else if (extraction.intent === 'reschedule_booking') {
-            operation = await this.bookings.rescheduleBooking(command);
-          } else {
-            operation = await this.bookings.createBooking(command);
-          }
-          if (operation.bookingCode) extraction.booking_id = operation.bookingCode;
-          result = {
-            reply: operation.reply,
-            duplicate: false,
-            handoff: false,
-            intent: extraction.intent,
-            extraction,
-            booking: bookingShape(operation),
-          };
-          break;
-        }
-        case 'unknown':
-        default: {
-          result = {
-            reply: 'Nisam potpuno razumio poruku. Možete li je kratko preformulisati ili zatražiti zaposlenika?',
-            duplicate: false,
-            handoff: false,
-            intent: 'unknown',
-            extraction,
-          };
-        }
-      }
+      case 'unknown':
+      default:
+        return { ...odgovor(okvir, PORUKA_NERAZUMIJEVANJE), intent: 'unknown' };
+    }
+  }
 
-      const slots = { ...prepared.slots, ...persistentSlots(extraction) };
-      await this.conversations.updateState(tenant.tenantId, prepared.conversationId, extraction, slots);
-      await this.conversations.recordOutbound(message, prepared.conversationId, result.reply);
-      return result;
+  // -------------------------------------------------------------------------
+  // Čovjek preuzima razgovor
+  // -------------------------------------------------------------------------
+
+  private async predajCovjeku(okvir: Okvir): Promise<OrchestrationResult> {
+    try {
+      await preuzeoCovjek(okvir.businessId, okvir.conversationId);
+    } catch (greska) {
+      logger.error('Preuzimanje razgovora nije zapisano u Core bazu.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        greska: opisGreske(greska),
+      });
+    }
+    return odgovor(okvir, PORUKA_PREUZEO_COVJEK, { handoff: true });
+  }
+
+  // -------------------------------------------------------------------------
+  // Otkazivanje
+  // -------------------------------------------------------------------------
+
+  private async otkazi(okvir: Okvir): Promise<OrchestrationResult> {
+    const appointmentId = okvir.extraction.booking_id.trim();
+    if (!jeUuid(appointmentId)) {
+      // Korisnik ne zna UUID termina, a Core ne nudi pretragu termina po
+      // telefonu. Dok je tako, otkazivanje ide na čovjeka.
+      return this.predajCovjeku(okvir);
+    }
+
+    const ishod = await otkaziTermin({
+      businessId: okvir.businessId,
+      appointmentId,
+      razlog: 'customer',
+    });
+
+    if (ishod.ok) {
+      return odgovor(okvir, 'Termin je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.', {
+        booking: { appointmentId },
+      });
+    }
+    if (ishod.vrsta === 'odbijeno') {
+      return odgovor(okvir, porukaZaOdbijenoOtkazivanje(ishod.razlog), {
+        booking: { appointmentId },
+      });
+    }
+    return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+  }
+
+  // -------------------------------------------------------------------------
+  // Provjera dostupnosti
+  // -------------------------------------------------------------------------
+
+  private async provjeriDostupnost(okvir: Okvir): Promise<OrchestrationResult> {
+    const { tenant, extraction, message } = okvir;
+    if (tenant.services.length === 0) return this.bezUsluga(okvir);
+
+    const datum = resolveBosnianDate(
+      extraction.date_expression,
+      extraction.date,
+      message.received_at,
+      tenant.timezone,
+    );
+    if (!datum) return odgovor(okvir, questionForMissingField('date'));
+
+    const usluga = selectService(tenant, extraction.service || extraction.room_type);
+    const slobodni = await this.slobodniZaDan(okvir, datum, usluga?.id);
+    if (!slobodni) return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+
+    return odgovor(okvir, ponudaAlternativa(slobodni, tenant.timezone), {
+      booking: { available: slobodni.length > 0 },
     });
   }
-}
 
+  // -------------------------------------------------------------------------
+  // Novi termin
+  // -------------------------------------------------------------------------
+
+  private async zakazi(okvir: Okvir): Promise<OrchestrationResult> {
+    const { tenant, extraction, message } = okvir;
+    if (tenant.services.length === 0) return this.bezUsluga(okvir);
+
+    const sazetak = selectService(tenant, extraction.service || extraction.room_type);
+    const usluga = sazetak ? mapService(tenant, sazetak) : null;
+
+    const nedostaje = computeMissingFields(
+      extraction,
+      usluga,
+      tenant.services.length,
+      tenant.bookingPolicy,
+    );
+    extraction.missing_fields = nedostaje;
+    extraction.ready_for_availability_check = nedostaje.length === 0;
+    if (nedostaje.length > 0 || !usluga) {
+      return odgovor(okvir, questionForMissingField(nedostaje[0] ?? 'service'));
+    }
+
+    const interval = resolveBookingInterval(extraction, usluga, message.received_at, tenant.timezone);
+    if (!interval) {
+      return odgovor(
+        okvir,
+        'Nisam mogao pouzdano odrediti datum i vrijeme. Molim vas napišite tačan dan i sat.',
+      );
+    }
+
+    const slobodni = await this.slobodniZaDan(okvir, interval.localDate, usluga.id);
+    if (!slobodni) return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+
+    const trazeni = interval.startsAt.toISOString();
+    const termin = slobodni.find((slot) => slot.startAt === trazeni);
+    if (!termin) {
+      return odgovor(okvir, porukaZaZauzetTermin(slobodni, tenant.timezone), {
+        booking: { available: false },
+      });
+    }
+
+    const ishod = await napraviTermin({
+      businessId: okvir.businessId,
+      startAt: termin.startAt,
+      endAt: termin.endAt,
+      serviceId: usluga.id,
+      staffMemberId: termin.staffMemberId,
+      klijent: { ime: extraction.customer_name, telefon: message.customer_phone },
+      biljeska: extraction.notes || 'Zakazano preko WhatsAppa.',
+      // Meta ponavlja webhookove; bez ovoga bi ponovljena isporuka napravila
+      // drugi termin.
+      idempotencyKey: message.event_id,
+    });
+
+    if (ishod.ok) {
+      extraction.booking_id = ishod.appointmentId;
+      return odgovor(
+        okvir,
+        porukaZaPotvrdjenTermin(termin.startAt, tenant.timezone, usluga.name),
+        { booking: { appointmentId: ishod.appointmentId, created: ishod.created, available: true } },
+      );
+    }
+    if (ishod.vrsta === 'odbijeno') {
+      // 409 se ne ponavlja: nudi se ono što je ostalo iz iste liste.
+      const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
+      return odgovor(okvir, porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone), {
+        booking: { available: false },
+      });
+    }
+    return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+  }
+
+  // -------------------------------------------------------------------------
+  // Pomjeranje termina
+  // -------------------------------------------------------------------------
+
+  private async pomjeri(okvir: Okvir): Promise<OrchestrationResult> {
+    const { tenant, extraction, message } = okvir;
+
+    const appointmentId = extraction.booking_id.trim();
+    if (!jeUuid(appointmentId)) {
+      // Isto kao kod otkazivanja: bez identifikatora termina iz Corea gateway
+      // ne smije nagađati koji termin pomjera.
+      return this.predajCovjeku(okvir);
+    }
+
+    const sazetak = selectService(tenant, extraction.service || extraction.room_type);
+    const usluga = sazetak ? mapService(tenant, sazetak) : zamjenskaUsluga(tenant);
+
+    const interval = resolveBookingInterval(extraction, usluga, message.received_at, tenant.timezone);
+    if (!interval) {
+      return odgovor(
+        okvir,
+        'Recite mi na koji dan i sat da pomjerim termin, na primjer "sutra u 14:30".',
+      );
+    }
+
+    const slobodni = await this.slobodniZaDan(okvir, interval.localDate, usluga.id || undefined);
+    if (!slobodni) return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+
+    const trazeni = interval.startsAt.toISOString();
+    const termin = slobodni.find((slot) => slot.startAt === trazeni);
+    if (!termin) {
+      return odgovor(okvir, porukaZaZauzetTermin(slobodni, tenant.timezone), {
+        booking: { appointmentId, available: false },
+      });
+    }
+
+    const ishod = await pomjeriTermin({
+      businessId: okvir.businessId,
+      appointmentId,
+      startAt: termin.startAt,
+      endAt: termin.endAt,
+    });
+
+    if (ishod.ok) {
+      return odgovor(okvir, porukaZaPomjerenTermin(termin.startAt, tenant.timezone), {
+        booking: { appointmentId: ishod.appointmentId, available: true },
+      });
+    }
+    if (ishod.vrsta === 'odbijeno') {
+      const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
+      return odgovor(okvir, porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone), {
+        booking: { appointmentId, available: false },
+      });
+    }
+    return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+  }
+
+  // -------------------------------------------------------------------------
+  // Zajedničko
+  // -------------------------------------------------------------------------
+
+  /** Slobodni termini za dan; `null` znači da Core nije odgovorio. */
+  private async slobodniZaDan(
+    okvir: Okvir,
+    datum: string,
+    serviceId?: string,
+  ): Promise<SlobodanTermin[] | null> {
+    const zaposlenik = selectEmployee(okvir.tenant, okvir.extraction.employee);
+    const ishod = await slobodniTermini({
+      businessId: okvir.businessId,
+      datum,
+      ...(serviceId ? { serviceId } : {}),
+      ...(zaposlenik ? { staffMemberId: zaposlenik } : {}),
+    });
+    return ishod.ok ? ishod.termini : null;
+  }
+
+  /** Biznis u Coreu nema nijednu aktivnu uslugu — asistent nema šta ponuditi. */
+  private async bezUsluga(okvir: Okvir): Promise<OrchestrationResult> {
+    try {
+      await preuzeoCovjek(okvir.businessId, okvir.conversationId);
+    } catch (greska) {
+      logger.error('Preuzimanje razgovora nije zapisano u Core bazu.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        greska: opisGreske(greska),
+      });
+    }
+    return odgovor(
+      okvir,
+      'Usluge još nisu unesene u sistem. Proslijedio sam vašu poruku zaposleniku.',
+      { handoff: true },
+    );
+  }
+}

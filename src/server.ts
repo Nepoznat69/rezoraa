@@ -6,7 +6,6 @@ import { NormalizedMessageSchema } from './domain/schemas.js';
 import { pool, query } from './infrastructure/database.js';
 import { logger } from './lib/logger.js';
 import { safeEqual, sha256, verifyMetaSignature } from './lib/security.js';
-import { BookingService } from './modules/booking/booking-service.js';
 import { MetaClient } from './modules/channels/meta/meta-client.js';
 import {
   completeMetaOnboarding,
@@ -15,6 +14,7 @@ import {
 import { tajnePoKanalu, tajnePoWebhookKljucu } from './modules/channels/meta/meta-kanal-tajne.js';
 import { MetaWebhookService } from './modules/channels/meta/meta-webhook.js';
 import { ConversationOrchestrator } from './modules/conversations/orchestrator.js';
+import { zatvoriCoreVezu } from './modules/core-baza/core-repozitorij.js';
 import { InboundWorker } from './modules/inbound/inbound-worker.js';
 import { renderDashboard } from './modules/klijenti/dashboard-stranica.js';
 import {
@@ -44,7 +44,6 @@ const orchestrator = new ConversationOrchestrator();
 const webhook = new MetaWebhookService();
 const meta = new MetaClient();
 const worker = new InboundWorker();
-const bookings = new BookingService();
 
 function bearerToken(header: string | undefined): string {
   return header?.startsWith('Bearer ') ? header.slice(7) : '';
@@ -55,11 +54,15 @@ function internalAuthorized(header: string | string[] | undefined): boolean {
   return typeof value === 'string' && safeEqual(value, config.INTERNAL_API_KEY);
 }
 
-async function qrAuthorized(tenantId: string, channelId: string, token: string): Promise<boolean> {
+/**
+ * QR kanal je pristup samog gatewaya, pa se i dalje traži u lokalnoj tabeli
+ * `channels` — samo više ne po tenantu, jer gateway tenante nema.
+ */
+async function qrAuthorized(channelId: string, token: string): Promise<boolean> {
   const rows = await query<{ auth_secret_hash: string | null }>(
     `SELECT auth_secret_hash FROM channels
-      WHERE tenant_id = $1 AND id = $2 AND type = 'whatsapp_qr' AND status = 'active'`,
-    [tenantId, channelId],
+      WHERE id = $1 AND type = 'whatsapp_qr' AND status = 'active'`,
+    [channelId],
   );
   const expected = rows[0]?.auth_secret_hash;
   if (!expected) return safeEqual(token, config.QR_AGENT_TOKEN);
@@ -88,7 +91,7 @@ app.get('/health/ready', async (_request, reply) => {
 app.post('/api/v1/channels/qr/inbound', async (request, reply) => {
   const message = NormalizedMessageSchema.parse(request.body);
   const token = bearerToken(request.headers.authorization);
-  if (!(await qrAuthorized(message.tenant_id, message.channel_id, token))) {
+  if (!(await qrAuthorized(message.channel_id, token))) {
     return reply.code(401).send({ message: 'QR Agent nije autorizovan.' });
   }
   const result = await orchestrator.process(message);
@@ -103,13 +106,8 @@ app.post('/api/v1/internal/orchestrate', async (request, reply) => {
   return reply.send(await orchestrator.process(message));
 });
 
-app.post('/api/v1/internal/jobs/expire-holds', async (request, reply) => {
-  if (!internalAuthorized(request.headers['x-internal-api-key'])) {
-    return reply.code(401).send({ message: 'Interni poziv nije autorizovan.' });
-  }
-  const count = await bookings.expireHolds();
-  return reply.send({ isteklo_holdova: count });
-});
+// Ruta /api/v1/internal/jobs/expire-holds je uklonjena: holdovi su bili dio
+// lokalnog bookinga, a termini su sada u cijelosti u Rezora Coreu.
 
 const MetaSendSchema = z.object({
   channel_id: z.string().uuid(),
@@ -451,18 +449,11 @@ app.setErrorHandler((error, request, reply) => {
   });
 });
 
-const holdTimer = setInterval(() => {
-  void bookings.expireHolds().catch((error) => {
-    logger.error('Automatsko isticanje holdova nije uspjelo.', { greska: String(error) });
-  });
-}, 60_000);
-holdTimer.unref();
-
 async function shutdown(signal: string): Promise<void> {
   logger.info('Platforma se kontrolisano zaustavlja.', { signal });
   worker.stop();
-  clearInterval(holdTimer);
   await app.close().catch(() => undefined);
+  await zatvoriCoreVezu().catch(() => undefined);
   await pool.end().catch(() => undefined);
   process.exit(0);
 }

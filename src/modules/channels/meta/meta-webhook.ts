@@ -1,11 +1,20 @@
+/**
+ * Prijem Metinog webhooka.
+ *
+ * Kanal (pristupni podaci WhatsApp broja) je podatak SAMOG gatewaya i i dalje
+ * se traži u lokalnoj tabeli `channels` po `phone_number_id`. Biznis je podatak
+ * Rezora Corea: `business_id` se razrješava u Coreu preko iste te Metine
+ * vrijednosti, i u red čekanja ide on, a ne lokalni tenant.
+ */
+
 import { NormalizedMessageSchema, type NormalizedMessage } from '../../../domain/schemas.js';
 import { query } from '../../../infrastructure/database.js';
 import { logger } from '../../../lib/logger.js';
+import { azurirajStatusPoruke, businessIdZaBroj } from '../../core-baza/core-repozitorij.js';
 import { InboundRepository } from '../../inbound/inbound-repository.js';
 
 interface ChannelRow {
   id: string;
-  tenant_id: string;
 }
 
 function messageText(message: Record<string, unknown>): string {
@@ -49,7 +58,7 @@ export class MetaWebhookService {
         const metadata = value.metadata as { phone_number_id?: string } | undefined;
         if (!metadata?.phone_number_id) continue;
         const channels = await query<ChannelRow>(
-          `SELECT id, tenant_id FROM channels
+          `SELECT id FROM channels
             WHERE type = 'whatsapp_cloud' AND external_phone_number_id = $1 AND status = 'active'`,
           [metadata.phone_number_id],
         );
@@ -61,17 +70,26 @@ export class MetaWebhookService {
           continue;
         }
 
+        // Bez biznisa u Coreu nema gdje zapisati poruku ni kome odgovoriti.
+        // Zabilježi i preskoči — pogrešan biznis bi značio tuđi inbox.
+        const businessId = await businessIdZaBroj(metadata.phone_number_id);
+        if (!businessId) continue;
+
         const statuses = Array.isArray(value.statuses) ? value.statuses : [];
         for (const rawStatus of statuses) {
-          const status = rawStatus as { id?: string; status?: string; timestamp?: string };
+          const status = rawStatus as { id?: string; status?: string };
           if (!status.id || !status.status) continue;
-          await query(
-            `UPDATE messages SET status = $3,
-                    metadata = metadata || jsonb_build_object('meta_status_timestamp', $4::text)
-              WHERE tenant_id = $1 AND channel_id = $2 AND external_message_id = $5`,
-            [channel.tenant_id, channel.id, status.status, status.timestamp ?? '', status.id],
-          );
-          statusCount += 1;
+          try {
+            await azurirajStatusPoruke(businessId, status.id, status.status);
+            statusCount += 1;
+          } catch (greska) {
+            // Meta zna poslati status koji ugovor Core baze ne poznaje; to nije
+            // razlog da se ostatak webhooka odbaci.
+            logger.warn('Status isporuke nije zapisan.', {
+              business_id: businessId,
+              razlog: greska instanceof Error ? greska.message : String(greska),
+            });
+          }
         }
 
         const contacts = Array.isArray(value.contacts) ? value.contacts : [];
@@ -86,7 +104,7 @@ export class MetaWebhookService {
           const type = String(message.type ?? 'unknown');
           const normalized = NormalizedMessageSchema.parse({
             event_id: id,
-            tenant_id: channel.tenant_id,
+            business_id: businessId,
             channel_id: channel.id,
             channel_type: 'whatsapp_cloud',
             external_message_id: id,

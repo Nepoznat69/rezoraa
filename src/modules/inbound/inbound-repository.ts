@@ -1,3 +1,15 @@
+/**
+ * Red čekanja dolaznih poruka.
+ *
+ * `inbound_events` NAMJERNO ostaje u lokalnoj bazi: to je infrastruktura
+ * gatewaya (isporuka, ponovni pokušaji, redoslijed po sagovorniku), a ne
+ * poslovni podatak. Poslovni podaci su u Rezora Coreu.
+ *
+ * Kolona se istorijski zove `tenant_id`, ali u njoj od prelaska na Core stoji
+ * `business_id` iz Corea. Ime kolone se ne dira jer se lokalne migracije ne
+ * mijenjaju; jedino mjesto koje o toj razlici mora znati je ovaj fajl.
+ */
+
 import type { NormalizedMessage } from '../../domain/schemas.js';
 import { query, withTransaction } from '../../infrastructure/database.js';
 
@@ -16,7 +28,8 @@ export class InboundRepository {
        ON CONFLICT (tenant_id, channel_id, event_id) DO NOTHING
        RETURNING id`,
       [
-        message.tenant_id,
+        // business_id iz Corea u istoimenu (istorijski nazvanu) kolonu.
+        message.business_id,
         message.channel_id,
         message.event_id,
         message.customer_external_id,

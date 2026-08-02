@@ -89,7 +89,9 @@ client.on('message', (message) => {
       const externalId = message.id?._serialized || `${message.from}-${message.timestamp}`;
       const payload = NormalizedMessageSchema.parse({
         event_id: externalId,
-        tenant_id: config.QR_TENANT_ID,
+        // Ime varijable je istorijsko (.env se ne dira); vrijednost mora biti
+        // `business_id` biznisa u Rezora Coreu.
+        business_id: config.QR_TENANT_ID,
         channel_id: config.QR_CHANNEL_ID,
         channel_type: 'whatsapp_qr',
         external_message_id: externalId,
