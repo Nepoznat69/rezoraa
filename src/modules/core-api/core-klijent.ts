@@ -865,3 +865,72 @@ function terminIzOdgovora(
     created: tijelo.created === true,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Nadolazeći termini kupca
+//
+// Kupac na WhatsAppu kaže "pomjeri mi termin". Identifikator termina ne zna i
+// nikad ga neće otkucati — jedino što imamo je broj s kojeg piše. Ovo taj broj
+// pretvara u njegove buduće termine, pa pomjeranje i otkazivanje prestaju biti
+// slijepa ulica koja završi predajom čovjeku.
+//
+// Filtriranje po statusu i vremenu radi Core; gateway ne ponavlja ta pravila
+// da se ne raziđu od onih koje primjenjuje ekran za rezervacije.
+// ---------------------------------------------------------------------------
+
+export interface TerminKupca {
+  appointmentId: string;
+  pocetak: string;
+  kraj: string;
+  usluga: string;
+  zaposlenik: string;
+}
+
+interface ZicaTerminKupca {
+  id?: unknown;
+  start_at?: unknown;
+  end_at?: unknown;
+  service_name?: unknown;
+  staff_name?: unknown;
+}
+
+export async function nadolazeciTermini(
+  businessId: string,
+  telefon: string,
+): Promise<Ishod<{ termini: TerminKupca[] }>> {
+  if (!jeUuid(businessId)) {
+    return neuspjehUlaza('businessId mora biti UUID — zahtjev prema Coreu nije poslan.');
+  }
+  const broj = telefon.trim();
+  if (!broj) {
+    return neuspjehUlaza('Telefon je prazan — zahtjev prema Coreu nije poslan.');
+  }
+  const biznis = businessId.trim();
+
+  const putanja =
+    `/appointments?business_id=${encodeURIComponent(biznis)}` +
+    `&phone=${encodeURIComponent(broj)}`;
+  const odgovor = await posalji(putanja, 'GET', null, biznis);
+  if (jeNeuspjeh(odgovor)) return odgovor;
+
+  const tijelo = objekat(odgovor.tijelo);
+  if (!tijelo || !Array.isArray(tijelo.appointments)) {
+    return neispravanOblik('/appointments', odgovor.status);
+  }
+
+  const termini = nizOd<ZicaTerminKupca, TerminKupca>(tijelo.appointments, (red) => {
+    if (!jeUuid(red.id)) return null;
+    const pocetak = utcIso(red.start_at);
+    const kraj = utcIso(red.end_at);
+    if (!pocetak || !kraj) return null;
+    return {
+      appointmentId: red.id.trim(),
+      pocetak,
+      kraj,
+      usluga: jeTekst(red.service_name) ? red.service_name : '',
+      zaposlenik: jeTekst(red.staff_name) ? red.staff_name : '',
+    };
+  });
+
+  return { ok: true, termini };
+}

@@ -40,6 +40,7 @@ import {
   napraviTermin,
   otkaziTermin,
   pomjeriTermin,
+  nadolazeciTermini,
   slobodniTermini,
   type SlobodanTermin,
 } from '../core-api/core-klijent.js';
@@ -60,6 +61,7 @@ import {
   PORUKA_NERAZUMIJEVANJE,
   PORUKA_PREUZEO_COVJEK,
   PORUKA_TEHNICKI_PROBLEM,
+  opisTermina,
   ponudaAlternativa,
   zeljeniProzor,
   type ZeljenoVrijeme,
@@ -183,6 +185,12 @@ interface Okvir {
   message: NormalizedMessage;
   extraction: AiExtraction;
 }
+
+/** Koji termin kupac misli: nađen, treba pitati, ili Core ne odgovara. */
+type NadjenTermin =
+  | { vrsta: 'nadjen'; appointmentId: string }
+  | { vrsta: 'pitanje'; tekst: string }
+  | { vrsta: 'nedostupno' };
 
 /**
  * Doba dana koje je kupac tražio, za ponudu alternativa.
@@ -434,12 +442,10 @@ export class ConversationOrchestrator {
   // -------------------------------------------------------------------------
 
   private async otkazi(okvir: Okvir): Promise<OrchestrationResult> {
-    const appointmentId = okvir.extraction.booking_id.trim();
-    if (!jeUuid(appointmentId)) {
-      // Korisnik ne zna UUID termina, a Core ne nudi pretragu termina po
-      // telefonu. Dok je tako, otkazivanje ide na čovjeka.
-      return this.predajCovjeku(okvir);
-    }
+    const nadjen = await this.nadjiTerminKupca(okvir);
+    if (nadjen.vrsta === 'nedostupno') return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+    if (nadjen.vrsta === 'pitanje') return odgovor(okvir, nadjen.tekst);
+    const appointmentId = nadjen.appointmentId;
 
     const ishod = await otkaziTermin({
       businessId: okvir.businessId,
@@ -631,12 +637,10 @@ export class ConversationOrchestrator {
   private async pomjeri(okvir: Okvir): Promise<OrchestrationResult> {
     const { tenant, extraction, message } = okvir;
 
-    const appointmentId = extraction.booking_id.trim();
-    if (!jeUuid(appointmentId)) {
-      // Isto kao kod otkazivanja: bez identifikatora termina iz Corea gateway
-      // ne smije nagađati koji termin pomjera.
-      return this.predajCovjeku(okvir);
-    }
+    const nadjen = await this.nadjiTerminKupca(okvir);
+    if (nadjen.vrsta === 'nedostupno') return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+    if (nadjen.vrsta === 'pitanje') return odgovor(okvir, nadjen.tekst);
+    const appointmentId = nadjen.appointmentId;
 
     const sazetak = selectService(tenant, extraction.service || extraction.room_type);
     const usluga = sazetak ? mapService(tenant, sazetak) : zamjenskaUsluga(tenant);
@@ -721,6 +725,57 @@ export class ConversationOrchestrator {
   // -------------------------------------------------------------------------
   // Zajedničko
   // -------------------------------------------------------------------------
+
+  /**
+   * Koji termin kupac misli kad kaže "pomjeri mi termin".
+   *
+   * Identifikator termina zna samo Core; kupac ga nikad neće otkucati. Zato se
+   * ide na jedino što imamo — broj s kojeg piše. Ranije je svaki takav zahtjev
+   * završavao predajom čovjeku, pa u salonu bez dežurnog Inboxa i nigdje.
+   *
+   * Nagađanja nema: kad kupac ima više budućih termina, asistent pita koji, a
+   * kad nema nijedan, to mu i kaže umjesto da ćuti.
+   */
+  private async nadjiTerminKupca(okvir: Okvir): Promise<NadjenTermin> {
+    const izPoruke = okvir.extraction.booking_id.trim();
+    if (jeUuid(izPoruke)) return { vrsta: 'nadjen', appointmentId: izPoruke };
+
+    const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
+    if (!ishod.ok) {
+      logger.warn('Termini kupca nisu dohvaćeni iz Corea.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        vrsta: ishod.vrsta,
+      });
+      return { vrsta: 'nedostupno' };
+    }
+
+    const termini = ishod.termini;
+    if (termini.length === 0) {
+      return {
+        vrsta: 'pitanje',
+        tekst:
+          'Na ovaj broj ne vidim nijedan budući termin. Recite mi na koji dan i sat ' +
+          'je zakazan, pa ću ga potražiti.',
+      };
+    }
+    if (termini.length === 1) {
+      return { vrsta: 'nadjen', appointmentId: termini[0].appointmentId };
+    }
+
+    const zona = okvir.tenant.timezone;
+    const spisak = termini
+      .slice(0, 5)
+      .map((termin) => {
+        const usluga = termin.usluga ? ` (${termin.usluga.toLocaleLowerCase('bs')})` : '';
+        return `${opisTermina(termin.pocetak, zona)}${usluga}`;
+      })
+      .join(', ');
+    return {
+      vrsta: 'pitanje',
+      tekst: `Imate više termina: ${spisak}. Koji od njih mislite?`,
+    };
+  }
 
   /** Slobodni termini za dan; `null` znači da Core nije odgovorio. */
   private async slobodniZaDan(
