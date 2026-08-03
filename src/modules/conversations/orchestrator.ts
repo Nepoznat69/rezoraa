@@ -24,6 +24,7 @@
  * ============================================================================
  */
 
+import { DateTime } from 'luxon';
 import { computeMissingFields, questionForMissingField } from '../../domain/booking-rules.js';
 import { resolveBookingInterval, resolveBosnianDate } from '../../domain/date-resolver.js';
 import {
@@ -566,10 +567,27 @@ export class ConversationOrchestrator {
       );
     }
 
+    const trazeni = interval.startsAt.toISOString();
+
+    // Kupac koji vec ima termin tog dana ne zakazuje ponovo.
+    //
+    // Bez ovoga je "Ok" poslije potvrde ponovo pokretalo zakazivanje: sat je u
+    // medjuvremenu zauzeo njegov VLASTITI termin, pa mu je asistent javio da
+    // nije slobodno ono sto mu je minut ranije potvrdio.
+    const vecIma = await this.terminTogDana(okvir, interval.localDate);
+    if (vecIma) {
+      const tekst =
+        vecIma.pocetak === trazeni
+          ? porukaZaPotvrdjenTermin(vecIma.pocetak, tenant.timezone, vecIma.usluga)
+          : porukaZaVecZauzetDan(vecIma.pocetak, tenant.timezone);
+      return odgovor(okvir, tekst, {
+        booking: { appointmentId: vecIma.appointmentId, created: false },
+      });
+    }
+
     const slobodni = await this.slobodniZaDan(okvir, interval.localDate, usluga.id);
     if (!slobodni) return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
 
-    const trazeni = interval.startsAt.toISOString();
     const termin = slobodni.find((slot) => slot.startAt === trazeni);
     if (!termin) {
       const zelja = zeljaKupca(okvir);
@@ -801,6 +819,29 @@ export class ConversationOrchestrator {
       vrsta: 'pitanje',
       tekst: `Imate više termina: ${spisak}. Koji od njih mislite?`,
     };
+  }
+
+  /**
+   * Termin koji kupac vec ima na taj dan, ako ga ima.
+   *
+   * Kad Core ne odgovori vraca se `null` — zakazivanje tada ide dalje i Core
+   * ionako ima zadnju rijec preko pravila o jednoj rezervaciji po danu. Bolje
+   * je propustiti provjeru nego prekinuti razgovor zbog nje.
+   */
+  private async terminTogDana(
+    okvir: Okvir,
+    lokalniDatum: string,
+  ): Promise<{ appointmentId: string; pocetak: string; usluga: string } | null> {
+    const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
+    if (!ishod.ok) return null;
+
+    const zona = okvir.tenant.timezone;
+    const nadjen = ishod.termini.find(
+      (termin) => DateTime.fromISO(termin.pocetak, { zone: 'utc' }).setZone(zona).toISODate() === lokalniDatum,
+    );
+    return nadjen
+      ? { appointmentId: nadjen.appointmentId, pocetak: nadjen.pocetak, usluga: nadjen.usluga }
+      : null;
   }
 
   /** Slobodni termini za dan; `null` znači da Core nije odgovorio. */
