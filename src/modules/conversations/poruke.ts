@@ -69,6 +69,27 @@ export function opisTermina(utcIso: string, vremenskaZona: string): string {
 }
 
 /**
+ * Satnice najviše `koliko` termina, bez ponavljanja istog sata.
+ *
+ * Isti izbor koriste i šablonska rečenica i činjenice koje ide AI sloju
+ * (`cinjenice.ts`), da se ne razilaze: AI ne smije dobiti sat koji šablon ne bi
+ * ponudio.
+ */
+export function satnice(
+  termini: SlobodanTermin[],
+  vremenskaZona: string,
+  koliko = 3,
+): string[] {
+  const izabrane: string[] = [];
+  for (const termin of termini) {
+    const vrijeme = sat(termin.startAt, vremenskaZona);
+    if (vrijeme && !izabrane.includes(vrijeme)) izabrane.push(vrijeme);
+    if (izabrane.length >= koliko) break;
+  }
+  return izabrane;
+}
+
+/**
  * Nabraja najviše tri slobodna sata. Više od toga se u WhatsApp poruci ne čita.
  */
 export function nabrojTermine(
@@ -76,15 +97,10 @@ export function nabrojTermine(
   vremenskaZona: string,
   koliko = 3,
 ): string {
-  const satnice: string[] = [];
-  for (const termin of termini) {
-    const vrijeme = sat(termin.startAt, vremenskaZona);
-    if (vrijeme && !satnice.includes(vrijeme)) satnice.push(vrijeme);
-    if (satnice.length >= koliko) break;
-  }
-  if (satnice.length === 0) return '';
-  if (satnice.length === 1) return satnice[0];
-  return `${satnice.slice(0, -1).join(', ')} i ${satnice[satnice.length - 1]}`;
+  const izabrane = satnice(termini, vremenskaZona, koliko);
+  if (izabrane.length === 0) return '';
+  if (izabrane.length === 1) return izabrane[0];
+  return `${izabrane.slice(0, -1).join(', ')} i ${izabrane[izabrane.length - 1]}`;
 }
 
 /**
@@ -96,7 +112,12 @@ export interface ZeljenoVrijeme {
   doMinuta?: number;
   /** Traži kasnije nego što smo ponudili, bez konkretnog sata. */
   kasnije?: boolean;
+  /** Doba dana imenovano ljudski, za činjenice koje ide AI sloju. */
+  doba?: DobaDana;
 }
+
+/** Doba dana koje je kupac imenovao, bez konkretnog sata. */
+export type DobaDana = 'jutro' | 'popodne' | 'navečer' | 'kasnije';
 
 function minuteTermina(termin: SlobodanTermin, vremenskaZona: string): number | null {
   const d = DateTime.fromISO(termin.startAt, { zone: 'utc' }).setZone(vremenskaZona);
@@ -123,10 +144,14 @@ export function zeljeniProzor(startTime: string, izraz: string): ZeljenoVrijeme 
     .replace(/[̀-ͯ]/g, '');
   if (!tekst) return null;
 
-  if (/kasnij|poslije|nakon/.test(tekst)) return { kasnije: true };
-  if (/prije podne|prijepodne|ujutro|jutro|rano/.test(tekst)) return { doMinuta: 12 * 60 };
-  if (/navece|uvece|vece/.test(tekst)) return { odMinuta: 16 * 60 };
-  if (/popodne|poslije podne|poslijepodne/.test(tekst)) return { odMinuta: 12 * 60 };
+  if (/kasnij|poslije|nakon/.test(tekst)) return { kasnije: true, doba: 'kasnije' };
+  if (/prije podne|prijepodne|ujutro|jutro|rano/.test(tekst)) {
+    return { doMinuta: 12 * 60, doba: 'jutro' };
+  }
+  if (/navece|uvece|vece/.test(tekst)) return { odMinuta: 16 * 60, doba: 'navečer' };
+  if (/popodne|poslije podne|poslijepodne/.test(tekst)) {
+    return { odMinuta: 12 * 60, doba: 'popodne' };
+  }
   return null;
 }
 
@@ -145,6 +170,38 @@ function uProzoru(
   });
 }
 
+/** Šta se od slobodnih termina zaista nudi kupcu. */
+export interface IzborTermina {
+  /** Termini koje smijemo ponuditi, u redoslijedu u kojem se izgovaraju. */
+  ponudjeni: SlobodanTermin[];
+  /** Kupac je tražio doba dana u kojem nema ničega — to mu se mora reći. */
+  mimoZelje: boolean;
+}
+
+/**
+ * Bira koje termine kupac dobija, na osnovu onoga što je tražio.
+ *
+ * JEDINO mjesto tog izbora. Šablonska rečenica i činjenice za AI sloj zovu istu
+ * funkciju, pa AI ne može dobiti sat koji šablon ne bi ponudio.
+ */
+export function izaberiTermine(
+  termini: SlobodanTermin[],
+  vremenskaZona: string,
+  zelja: ZeljenoVrijeme | null = null,
+): IzborTermina {
+  if (termini.length === 0) return { ponudjeni: [], mimoZelje: false };
+
+  // „Može li kasnije" — nudi se kraj dana, ne opet početak.
+  if (zelja?.kasnije) return { ponudjeni: termini.slice(-3), mimoZelje: false };
+
+  const uzi = uProzoru(termini, vremenskaZona, zelja);
+  if (uzi.length > 0) return { ponudjeni: uzi, mimoZelje: false };
+
+  // Tražio je doba dana u kojem ničega nema; nudi se najbliže tom dobu.
+  const najblizi = zelja?.odMinuta !== undefined ? termini.slice(-3) : termini.slice(0, 3);
+  return { ponudjeni: najblizi, mimoZelje: true };
+}
+
 /**
  * Rečenica sa ponudom termina.
  *
@@ -161,25 +218,22 @@ export function ponudaAlternativa(
     return 'Tog dana nemam više slobodnih termina. Recite mi koji drugi dan bi vam odgovarao.';
   }
 
-  // „Može li kasnije" — nudi se kraj dana, ne opet početak.
+  const izbor = izaberiTermine(termini, vremenskaZona, zelja);
+  const spisak = nabrojTermine(izbor.ponudjeni, vremenskaZona);
+
+  if (izbor.mimoZelje) {
+    const zadnjiSat = sat(termini[termini.length - 1].startAt, vremenskaZona);
+    return (
+      `U to vrijeme nemamo slobodno — zadnji termin tog dana je u ${zadnjiSat}. ` +
+      `Slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`
+    );
+  }
+
   if (zelja?.kasnije) {
-    const spisak = nabrojTermine(termini.slice(-3), vremenskaZona);
     return `Kasnije tog dana slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`;
   }
 
-  const uzi = uProzoru(termini, vremenskaZona, zelja);
-  if (uzi.length > 0) {
-    return `Slobodno je: ${nabrojTermine(uzi, vremenskaZona)}. Odgovara li vam neki od tih termina?`;
-  }
-
-  // Tražio je doba dana u kojem ničega nema. Reci to jasno i ponudi najbliže.
-  const zadnjiSat = sat(termini[termini.length - 1].startAt, vremenskaZona);
-  const najblizi = zelja?.odMinuta !== undefined ? termini.slice(-3) : termini.slice(0, 3);
-  const spisak = nabrojTermine(najblizi, vremenskaZona);
-  return (
-    `U to vrijeme nemamo slobodno — zadnji termin tog dana je u ${zadnjiSat}. ` +
-    `Slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`
-  );
+  return `Slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`;
 }
 
 /**

@@ -51,6 +51,8 @@ import {
   zapisiOdlaznuPoruku,
 } from '../core-baza/core-repozitorij.js';
 import { kontekstZaBiznis } from '../core-kontekst/kontekst.js';
+import { ljudskiRazlog, sastaviCinjenice, type UlazCinjenica } from './cinjenice.js';
+import { izgovori } from './izgovor.js';
 import {
   PORUKA_CORE_NEDOSTUPAN,
   PORUKA_NERAZUMIJEVANJE,
@@ -193,6 +195,28 @@ function zeljaKupca(okvir: Okvir): ZeljenoVrijeme | null {
     okvir.extraction.start_time,
     okvir.extraction.start_time_expression || okvir.message.text,
   );
+}
+
+/** Naziv i trajanje usluge za činjenice; bez usluge se o njoj ne govori. */
+function uslugaZaCinjenice(
+  usluga: { name: string; defaultDurationMinutes: number } | null | undefined,
+): { naziv: string; trajanjeMinuta: number } | null {
+  if (!usluga || !usluga.name.trim()) return null;
+  return { naziv: usluga.name.trim(), trajanjeMinuta: usluga.defaultDurationMinutes };
+}
+
+/**
+ * Šablonska rečenica se izgovori ljudski.
+ *
+ * Šablon se i dalje računa i ostaje rezerva: kad je AI isključen ili padne,
+ * kupac dobija tačno ono što bi dobio i danas.
+ */
+async function ljudski(
+  okvir: Okvir,
+  sablon: string,
+  ulaz: Omit<UlazCinjenica, 'tenant'>,
+): Promise<string> {
+  return izgovori(sastaviCinjenice({ ...ulaz, tenant: okvir.tenant }), sablon);
 }
 
 function tiho(intent: AiExtraction['intent'] = 'unknown'): OrchestrationResult {
@@ -407,7 +431,8 @@ export class ConversationOrchestrator {
     });
 
     if (ishod.ok) {
-      return odgovor(okvir, 'Termin je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.', {
+      const sablon = 'Termin je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.';
+      return odgovor(okvir, await ljudski(okvir, sablon, { vrsta: 'otkazano' }), {
         booking: { appointmentId },
       });
     }
@@ -447,8 +472,21 @@ export class ConversationOrchestrator {
     // samo kad ima konkretan sat, pa bi "može li kasnije" i "a popodne" inače
     // prošli kao da vrijeme nije ni spomenuto.
     const zelja = zeljaKupca(okvir);
+    const sablon = ponudaAlternativa(slobodni, tenant.timezone, zelja);
 
-    return odgovor(okvir, ponudaAlternativa(slobodni, tenant.timezone, zelja), {
+    // Šablon zna nabrojati sate, ali ne zna reći „radimo do 17:00, zadnji
+    // termin je u 16:40". Zato ista lista ide i kao činjenice.
+    const tekst = await ljudski(okvir, sablon, {
+      vrsta: slobodni.length > 0 ? 'ponuda' : 'nema_termina',
+      datum,
+      usluga: uslugaZaCinjenice(usluga),
+      slobodni,
+      zelja,
+      trazeniSat: extraction.start_time,
+      staffMemberId: selectEmployee(tenant, extraction.employee),
+    });
+
+    return odgovor(okvir, tekst, {
       booking: { available: slobodni.length > 0 },
     });
   }
@@ -473,7 +511,13 @@ export class ConversationOrchestrator {
     extraction.missing_fields = nedostaje;
     extraction.ready_for_availability_check = nedostaje.length === 0;
     if (nedostaje.length > 0 || !usluga) {
-      return odgovor(okvir, questionForMissingField(nedostaje[0] ?? 'service'));
+      const polje = nedostaje[0] ?? 'service';
+      const tekst = await ljudski(okvir, questionForMissingField(polje), {
+        vrsta: 'trazi_podatak',
+        usluga: uslugaZaCinjenice(sazetak),
+        faliPolje: polje,
+      });
+      return odgovor(okvir, tekst);
     }
 
     const interval = resolveBookingInterval(extraction, usluga, message.received_at, tenant.timezone);
@@ -490,9 +534,22 @@ export class ConversationOrchestrator {
     const trazeni = interval.startsAt.toISOString();
     const termin = slobodni.find((slot) => slot.startAt === trazeni);
     if (!termin) {
-      return odgovor(okvir, porukaZaZauzetTermin(slobodni, tenant.timezone, zeljaKupca(okvir)), {
-        booking: { available: false },
-      });
+      const zelja = zeljaKupca(okvir);
+      const tekst = await ljudski(
+        okvir,
+        porukaZaZauzetTermin(slobodni, tenant.timezone, zelja),
+        {
+          vrsta: 'odbijeno',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          slobodni,
+          zelja,
+          trazeniSat: extraction.start_time,
+          razlog: 'taj termin nije slobodan',
+          staffMemberId: selectEmployee(tenant, extraction.employee),
+        },
+      );
+      return odgovor(okvir, tekst, { booking: { available: false } });
     }
 
     const ishod = await napraviTermin({
@@ -510,18 +567,42 @@ export class ConversationOrchestrator {
 
     if (ishod.ok) {
       extraction.booking_id = ishod.appointmentId;
-      return odgovor(
+      const tekst = await ljudski(
         okvir,
         porukaZaPotvrdjenTermin(termin.startAt, tenant.timezone, usluga.name),
-        { booking: { appointmentId: ishod.appointmentId, created: ishod.created, available: true } },
+        {
+          vrsta: 'zakazano',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          terminUtc: termin.startAt,
+          staffMemberId: termin.staffMemberId,
+        },
       );
+      return odgovor(okvir, tekst, {
+        booking: { appointmentId: ishod.appointmentId, created: ishod.created, available: true },
+      });
     }
     if (ishod.vrsta === 'odbijeno') {
       // 409 se ne ponavlja: nudi se ono što je ostalo iz iste liste.
       const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
-      return odgovor(okvir, porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone, zeljaKupca(okvir)), {
-        booking: { available: false },
-      });
+      const zelja = zeljaKupca(okvir);
+      const tekst = await ljudski(
+        okvir,
+        porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone, zelja),
+        {
+          vrsta: 'odbijeno',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          // Kod nečitljivog vremena šablon namjerno ne nudi termine; činjenice
+          // ih zato ni ne dobijaju, da ih AI ne bi ponudio umjesto pitanja.
+          slobodni: ishod.razlog === 'invalidTime' ? [] : ostalo,
+          zelja,
+          trazeniSat: extraction.start_time,
+          razlog: ljudskiRazlog(ishod.razlog),
+          staffMemberId: selectEmployee(tenant, extraction.employee),
+        },
+      );
+      return odgovor(okvir, tekst, { booking: { available: false } });
     }
     return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
   }
@@ -557,9 +638,22 @@ export class ConversationOrchestrator {
     const trazeni = interval.startsAt.toISOString();
     const termin = slobodni.find((slot) => slot.startAt === trazeni);
     if (!termin) {
-      return odgovor(okvir, porukaZaZauzetTermin(slobodni, tenant.timezone, zeljaKupca(okvir)), {
-        booking: { appointmentId, available: false },
-      });
+      const zelja = zeljaKupca(okvir);
+      const tekst = await ljudski(
+        okvir,
+        porukaZaZauzetTermin(slobodni, tenant.timezone, zelja),
+        {
+          vrsta: 'odbijeno',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          slobodni,
+          zelja,
+          trazeniSat: extraction.start_time,
+          razlog: 'taj termin nije slobodan',
+          staffMemberId: selectEmployee(tenant, extraction.employee),
+        },
+      );
+      return odgovor(okvir, tekst, { booking: { appointmentId, available: false } });
     }
 
     const ishod = await pomjeriTermin({
@@ -570,15 +664,39 @@ export class ConversationOrchestrator {
     });
 
     if (ishod.ok) {
-      return odgovor(okvir, porukaZaPomjerenTermin(termin.startAt, tenant.timezone), {
+      const tekst = await ljudski(
+        okvir,
+        porukaZaPomjerenTermin(termin.startAt, tenant.timezone),
+        {
+          vrsta: 'pomjereno',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          terminUtc: termin.startAt,
+          staffMemberId: termin.staffMemberId,
+        },
+      );
+      return odgovor(okvir, tekst, {
         booking: { appointmentId: ishod.appointmentId, available: true },
       });
     }
     if (ishod.vrsta === 'odbijeno') {
       const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
-      return odgovor(okvir, porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone, zeljaKupca(okvir)), {
-        booking: { appointmentId, available: false },
-      });
+      const zelja = zeljaKupca(okvir);
+      const tekst = await ljudski(
+        okvir,
+        porukaZaOdbijenTermin(ishod.razlog, ostalo, tenant.timezone, zelja),
+        {
+          vrsta: 'odbijeno',
+          datum: interval.localDate,
+          usluga: uslugaZaCinjenice(usluga),
+          slobodni: ishod.razlog === 'invalidTime' ? [] : ostalo,
+          zelja,
+          trazeniSat: extraction.start_time,
+          razlog: ljudskiRazlog(ishod.razlog),
+          staffMemberId: selectEmployee(tenant, extraction.employee),
+        },
+      );
+      return odgovor(okvir, tekst, { booking: { appointmentId, available: false } });
     }
     return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
   }

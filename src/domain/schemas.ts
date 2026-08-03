@@ -94,6 +94,21 @@ export interface TenantContext {
   employees: Array<{ id: string; name: string }>;
   resources: Array<{ id: string; name: string; type: string; capacity: number }>;
   knowledge: Array<{ question: string; answer: string }>;
+  /**
+   * Radno vrijeme osoblja iz Corea (`working_hours` u internom ugovoru).
+   *
+   * Bez ovoga asistent ne zna do kada se radi, pa ne može reći ni najobičniju
+   * stvar koju kupac pita: "radimo do 17:00, zadnji termin je u 16:40".
+   * Vrijeme je lokalno za salon, `weekday` je 0 = nedjelja, kao u ugovoru.
+   */
+  workingHours: Array<{
+    staffMemberId: string;
+    weekday: number;
+    /** "09:00" u vremenskoj zoni salona. */
+    startTime: string;
+    /** "17:00" u vremenskoj zoni salona. */
+    endTime: string;
+  }>;
 }
 
 export type BookingModel =
