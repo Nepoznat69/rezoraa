@@ -114,6 +114,8 @@ export interface ZeljenoVrijeme {
   kasnije?: boolean;
   /** Doba dana imenovano ljudski, za činjenice koje ide AI sloju. */
   doba?: DobaDana;
+  /** Sat koji je kupac izričito naveo, u minutama od ponoći. */
+  ciljMinuta?: number;
 }
 
 /** Doba dana koje je kupac imenovao, bez konkretnog sata. */
@@ -135,7 +137,7 @@ export function zeljeniProzor(startTime: string, izraz: string): ZeljenoVrijeme 
   if (tacno) {
     const m = Number(tacno[1]) * 60 + Number(tacno[2]);
     // Sat i po oko traženog: dovoljno da ponudi blizu, a ne cijeli dan.
-    return { odMinuta: Math.max(0, m - 90), doMinuta: m + 90 };
+    return { odMinuta: Math.max(0, m - 90), doMinuta: m + 90, ciljMinuta: m };
   }
 
   const tekst = (izraz ?? '')
@@ -195,11 +197,35 @@ export function izaberiTermine(
   if (zelja?.kasnije) return { ponudjeni: termini.slice(-3), mimoZelje: false };
 
   const uzi = uProzoru(termini, vremenskaZona, zelja);
-  if (uzi.length > 0) return { ponudjeni: uzi, mimoZelje: false };
+  if (uzi.length > 0) {
+    return { ponudjeni: odTrazenogSata(uzi, vremenskaZona, zelja?.ciljMinuta), mimoZelje: false };
+  }
 
   // Tražio je doba dana u kojem ničega nema; nudi se najbliže tom dobu.
   const najblizi = zelja?.odMinuta !== undefined ? termini.slice(-3) : termini.slice(0, 3);
   return { ponudjeni: najblizi, mimoZelje: true };
+}
+
+/**
+ * Kad je kupac naveo sat, ponuda kreće od prvog termina koji nije prije njega.
+ *
+ * Prozor oko traženog sata je širok sat i po na obje strane, pa bi puko uzimanje
+ * prva tri termina na „12:55" ponudilo 11:30 — sat i po ranije, iako 13:00 stoji
+ * slobodno pet minuta kasnije. Kupac to čita kao da ga niko nije slušao.
+ *
+ * Ako poslije traženog sata nema ničega, nudi se ono najbliže prije njega.
+ */
+function odTrazenogSata(
+  termini: SlobodanTermin[],
+  vremenskaZona: string,
+  ciljMinuta: number | undefined,
+): SlobodanTermin[] {
+  if (ciljMinuta === undefined) return termini;
+  const prvi = termini.findIndex((t) => {
+    const m = minuteTermina(t, vremenskaZona);
+    return m !== null && m >= ciljMinuta;
+  });
+  return prvi === -1 ? termini.slice(-3) : termini.slice(prvi);
 }
 
 /**

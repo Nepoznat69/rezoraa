@@ -16,6 +16,7 @@ import {
 import {
   nabrojTermine,
   opisTermina,
+  izaberiTermine,
   ponudaAlternativa,
   porukaZaOdbijenTermin,
   porukaZaOdbijenoOtkazivanje,
@@ -23,6 +24,7 @@ import {
   porukaZaPotvrdjenTermin,
   porukaZaZauzetTermin,
   sat,
+  zeljeniProzor,
 } from '../src/modules/conversations/poruke.js';
 
 const ZONA = 'Europe/Sarajevo';
@@ -165,5 +167,38 @@ describe('poruke o uspjehu', () => {
 
     expect(poruka).toContain('pomjeren');
     expect(poruka).toContain('13:00');
+  });
+});
+
+describe('ponuda kad je kupac naveo tacan sat', () => {
+  // Prozor oko trazenog sata je sat i po na obje strane. Bez biranja "od
+  // trazenog nadalje" kupac koji pita za 12:55 dobije 11:30 — sat i po ranije,
+  // iako 13:00 stoji slobodno pet minuta kasnije.
+  const CIJELI_DAN: SlobodanTermin[] = [
+    termin('2026-08-05T09:30:00.000Z', '2026-08-05T09:50:00.000Z'), // 11:30
+    termin('2026-08-05T09:45:00.000Z', '2026-08-05T10:05:00.000Z'), // 11:45
+    termin('2026-08-05T10:00:00.000Z', '2026-08-05T10:20:00.000Z'), // 12:00
+    termin('2026-08-05T11:00:00.000Z', '2026-08-05T11:20:00.000Z'), // 13:00
+    termin('2026-08-05T11:15:00.000Z', '2026-08-05T11:35:00.000Z'), // 13:15
+  ];
+
+  it('krece od prvog termina koji nije prije trazenog sata', () => {
+    const zelja = zeljeniProzor('12:55', '12:55');
+    const izbor = izaberiTermine(CIJELI_DAN, ZONA, zelja);
+
+    expect(sat(izbor.ponudjeni[0].startAt, ZONA)).toBe('13:00');
+    expect(izbor.mimoZelje).toBe(false);
+  });
+
+  it('nudi najblize ranije kad poslije trazenog sata nema nicega', () => {
+    const zelja = zeljeniProzor('13:30', '13:30');
+    const izbor = izaberiTermine(CIJELI_DAN, ZONA, zelja);
+
+    expect(sat(izbor.ponudjeni[izbor.ponudjeni.length - 1].startAt, ZONA)).toBe('13:15');
+  });
+
+  it('bez navedenog sata redoslijed ostaje netaknut', () => {
+    const izbor = izaberiTermine(CIJELI_DAN, ZONA, null);
+    expect(sat(izbor.ponudjeni[0].startAt, ZONA)).toBe('11:30');
   });
 });

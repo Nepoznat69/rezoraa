@@ -50,7 +50,21 @@ export function resolveBosnianDate(
   return parsed.isValid ? parsed.toISODate() : null;
 }
 
+/**
+ * Sat koji je kupac tražio.
+ *
+ * `candidate` je AI-jevo tumačenje već svedeno na HH:mm i ono ima prednost.
+ * Kupac koji napiše „sutra u 2" misli 14:00, a to zna samo neko ko poznaje
+ * radno vrijeme salona — regularni izraz vidi golu dvojku i pročita 02:00.
+ * Ranije se izraz i vrijeme lijepilo u „2 14:00", pa je prvi broj pobjeđivao
+ * i termin je padao izvan radnog vremena.
+ *
+ * Izraz ostaje rezerva za slučaj kad AI ne vrati sat ili je isključen.
+ */
 export function resolveBosnianTime(expression: string, candidate: string): string | null {
+  const protumacen = candidate.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (protumacen) return `${protumacen[1].padStart(2, '0')}:${protumacen[2]}`;
+
   const source = `${expression} ${candidate}`.trim();
   const match = source.match(/(?:u\s*)?\b([01]?\d|2[0-3])(?:[:.]([0-5]\d))?\b/i);
   if (!match) return null;
