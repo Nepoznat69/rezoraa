@@ -68,6 +68,7 @@ import {
   porukaZaOdbijenTermin,
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
+  porukaZaNepoznatuUslugu,
   porukaZaPotvrdjenTermin,
   porukaZaVecZauzetDan,
   porukaZaZauzetTermin,
@@ -523,8 +524,21 @@ export class ConversationOrchestrator {
     const { tenant, extraction, message } = okvir;
     if (tenant.services.length === 0) return this.bezUsluga(okvir);
 
-    const sazetak = selectService(tenant, extraction.service || extraction.room_type);
+    const trazenaUsluga = (extraction.service || extraction.room_type).trim();
+    const sazetak = selectService(tenant, trazenaUsluga);
     const usluga = sazetak ? mapService(tenant, sazetak) : null;
+
+    // Kupac je rekao sta hoce, ali to ne radimo. Bez ove grane bi dobio
+    // „Koju uslugu zelite?" iznova, kao da ga niko nije ni cuo.
+    if (!usluga && trazenaUsluga) {
+      return odgovor(
+        okvir,
+        porukaZaNepoznatuUslugu(
+          trazenaUsluga,
+          tenant.services.map((stavka) => stavka.name),
+        ),
+      );
+    }
 
     const nedostaje = computeMissingFields(
       extraction,

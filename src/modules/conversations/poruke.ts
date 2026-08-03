@@ -338,3 +338,24 @@ export function porukaZaVecZauzetDan(utcIso: string, vremenskaZona: string): str
     'Mogu ga pomjeriti na drugo vrijeme ili otkazati — recite šta vam odgovara.'
   );
 }
+
+/**
+ * Kupac je imenovao uslugu koju salon ne radi.
+ *
+ * Ranije je takav odgovor padao u „fali podatak" i kupac je iznova dobijao
+ * „Koju uslugu zelite?" — bez rijeci o tome zasto. Ovdje se kaze i sta ne
+ * radimo i sta radimo, pa razgovor ide dalje umjesto u krug.
+ *
+ * Sablon namjerno: jedina imena u recenici su ona iz Coreovog spiska usluga.
+ */
+export function porukaZaNepoznatuUslugu(trazena: string, usluge: string[]): string {
+  const spisak = usluge.map((naziv) => naziv.toLocaleLowerCase('bs'));
+  const nabrojane =
+    spisak.length > 1
+      ? `${spisak.slice(0, -1).join(', ')} i ${spisak[spisak.length - 1]}`
+      : spisak[0];
+  return (
+    `${trazena.trim()} nažalost ne radimo. ` +
+    `Kod nas možete zakazati ${nabrojane}. Šta vam od toga odgovara?`
+  );
+}
