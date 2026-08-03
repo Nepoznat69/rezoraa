@@ -69,6 +69,7 @@ import {
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
   porukaZaPotvrdjenTermin,
+  porukaZaVecZauzetDan,
   porukaZaZauzetTermin,
 } from './poruke.js';
 
@@ -606,6 +607,17 @@ export class ConversationOrchestrator {
       });
     }
     if (ishod.vrsta === 'odbijeno') {
+      // Kupac vec ima termin tog dana. To nije odbijenica nego skretnica: ono
+      // sto zeli je promjena postojeceg termina, pa mu se kaze kada je i sta
+      // sve moze s njim.
+      if (ishod.razlog === 'alreadyBookedThatDay' && ishod.postojeci) {
+        return odgovor(
+          okvir,
+          porukaZaVecZauzetDan(ishod.postojeci.pocetak, tenant.timezone),
+          { booking: { appointmentId: ishod.postojeci.appointmentId, available: false } },
+        );
+      }
+
       // 409 se ne ponavlja: nudi se ono što je ostalo iz iste liste.
       const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
       const zelja = zeljaKupca(okvir);

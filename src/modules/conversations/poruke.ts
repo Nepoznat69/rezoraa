@@ -298,3 +298,17 @@ export function porukaZaPotvrdjenTermin(
 export function porukaZaPomjerenTermin(utcIso: string, vremenskaZona: string): string {
   return `Termin je pomjeren ${opisTermina(utcIso, vremenskaZona)}. Vidimo se!`;
 }
+
+/**
+ * Kupac vec ima termin tog dana.
+ *
+ * Ne ide kroz AI nego ostaje sablon: jedina brojka u recenici je sat termina
+ * koji kupac vec ima, a provjera izmisljenog u `izgovor.ts` propusta samo
+ * satove iz cinjenica. Sablon je ovdje i tacan i dovoljno topao.
+ */
+export function porukaZaVecZauzetDan(utcIso: string, vremenskaZona: string): string {
+  return (
+    `Već imate termin ${opisTermina(utcIso, vremenskaZona)}. ` +
+    'Mogu ga pomjeriti na drugo vrijeme ili otkazati — recite šta vam odgovara.'
+  );
+}

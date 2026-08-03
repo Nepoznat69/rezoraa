@@ -91,6 +91,9 @@ export const RAZLOZI_TERMINA = [
   'staffUnavailable',
   'outsideHours',
   'invalidTime',
+  // Kupac vec ima termin tog dana. Nije greska nego drugaciji tok razgovora:
+  // ono sto trazi je pomjeranje postojeceg, a ne novi termin.
+  'alreadyBookedThatDay',
 ] as const;
 export type RazlogTermina = (typeof RAZLOZI_TERMINA)[number];
 
@@ -136,6 +139,8 @@ export interface OdbijenTermin extends OsnovaNeuspjeha {
   vrsta: 'odbijeno';
   razlog: RazlogTermina | NepoznatRazlog;
   ponoviti: false;
+  /** Postojeci termin kad je razlog `alreadyBookedThatDay`; inace `null`. */
+  postojeci: { appointmentId: string; pocetak: string } | null;
 }
 
 export interface OdbijenoOtkazivanje extends OsnovaNeuspjeha {
@@ -837,6 +842,15 @@ function terminIzOdgovora(
   if (odgovor.status === 409) {
     const razlog = procitajRazlog(odgovor.tijelo, RAZLOZI_TERMINA);
     logger.info('Core je odbio termin.', { business_id: businessId, putanja, razlog });
+
+    // Kod `alreadyBookedThatDay` Core kaze i KOJI termin kupac vec ima, da mu
+    // asistent moze reci kada je, umjesto golog "ne moze".
+    const tijelo409 = objekat(odgovor.tijelo);
+    const pocetak = utcIso(tijelo409?.start_at);
+    const id = tijelo409?.appointment_id;
+    const postojeci =
+      jeUuid(id) && pocetak ? { appointmentId: id.trim(), pocetak } : null;
+
     return {
       ok: false,
       vrsta: 'odbijeno',
@@ -844,6 +858,7 @@ function terminIzOdgovora(
       poruka: `Core je odbio termin: ${razlog}.`,
       status: 409,
       ponoviti: false,
+      postojeci,
     };
   }
 
