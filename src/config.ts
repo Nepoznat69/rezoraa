@@ -21,6 +21,9 @@ const ConfigSchema = z.object({
     .default('postgresql://rezora:promijeni-lozinku@localhost:5432/rezora'),
   INTERNAL_API_KEY: z.string().default('promijeni-interni-kljuc'),
   ORCHESTRATION_MODE: z.enum(['backend', 'n8n']).default('backend'),
+  // Koliko dugo asistent šuti nakon predaje čovjeku ako se niko ne javi.
+  // Nula ili manje isključuje povratak i predaja ostaje trajna.
+  HANDOFF_POVRATAK_MINUTA: z.coerce.number().int().default(30),
   OPENAI_API_KEY: optionalText,
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
   OPENAI_ENABLED: booleanFromEnv,

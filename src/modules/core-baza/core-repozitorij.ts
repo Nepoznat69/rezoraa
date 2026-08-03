@@ -383,7 +383,7 @@ export async function preuzeoCovjek(businessId: string, conversationId: string):
 
   const redovi = await upit<{ id: string }>(
     `UPDATE public.conversations
-        SET status = 'human'
+        SET status = 'human', updated_at = now()
       WHERE business_id = $1
         AND id = $2
         AND status <> 'human'
@@ -395,6 +395,55 @@ export async function preuzeoCovjek(businessId: string, conversationId: string):
     logger.info('Čovjek je preuzeo razgovor, asistent šuti.', {
       business_id: biznis,
       conversation_id: razgovor,
+    });
+  }
+  return redovi.length > 0;
+}
+
+/**
+ * Vraća razgovor asistentu kad predaja nije urodila plodom.
+ *
+ * Predaja čovjeku ušutkava asistenta trajno. U salonu u kojem niko ne gleda
+ * Inbox to znači da kupac koji poslije napiše "može li rezervacija?" ne dobije
+ * odgovor nikada. Tišina je gora od nesavršenog odgovora, pa se asistent vraća
+ * ako se u zadanom roku nije javio nijedan čovjek.
+ *
+ * Ako je zaposlenik odgovorio (outbound poruka sa sent_by), razgovor ostaje
+ * njegov — bez obzira na protelo vrijeme.
+ */
+export async function vratiBotaAkoNikoNijeOdgovorio(
+  businessId: string,
+  conversationId: string,
+  minuta: number,
+): Promise<boolean> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+  if (!Number.isFinite(minuta) || minuta <= 0) return false;
+
+  const redovi = await upit<{ id: string }>(
+    `UPDATE public.conversations AS c
+        SET status = 'bot', updated_at = now()
+      WHERE c.business_id = $1
+        AND c.id = $2
+        AND c.status = 'human'
+        AND c.updated_at < now() - ($3 || ' minutes')::interval
+        AND NOT EXISTS (
+              SELECT 1
+                FROM public.messages AS m
+               WHERE m.conversation_id = c.id
+                 AND m.direction = 'outbound'
+                 AND m.sent_by IS NOT NULL
+                 AND m.created_at >= c.updated_at
+            )
+     RETURNING c.id`,
+    [biznis, razgovor, String(Math.round(minuta))],
+  );
+
+  if (redovi.length > 0) {
+    logger.info('Niko nije preuzeo razgovor u roku; asistent nastavlja.', {
+      business_id: biznis,
+      conversation_id: razgovor,
+      minuta,
     });
   }
   return redovi.length > 0;

@@ -15,6 +15,7 @@ import {
   postaviCoreIzvrsilac,
   preuzeoCovjek,
   stanjeRazgovora,
+  vratiBotaAkoNikoNijeOdgovorio,
   zapisiDolaznuPoruku,
   zapisiOdlaznuPoruku,
   type IzvrsilacUpita,
@@ -251,6 +252,44 @@ describe('preuzeoCovjek', () => {
 
   it('odbija neispravan conversation_id', async () => {
     await expect(preuzeoCovjek(BIZNIS, 'nije-uuid')).rejects.toThrow(/conversationId/i);
+    expect(upiti).toHaveLength(0);
+  });
+});
+
+describe('vratiBotaAkoNikoNijeOdgovorio', () => {
+  it('vraća status bot samo unutar svog biznisa i tek nakon isteka roka', async () => {
+    odgovori = [[{ id: RAZGOVOR }]];
+    await expect(vratiBotaAkoNikoNijeOdgovorio(BIZNIS, RAZGOVOR, 30)).resolves.toBe(true);
+
+    expect(upiti[0].tekst).toContain("SET status = 'bot'");
+    expect(upiti[0].tekst).toContain('c.business_id = $1');
+    expect(upiti[0].tekst).toContain("c.status = 'human'");
+    expect(upiti[0].tekst).toContain("($3 || ' minutes')::interval");
+    expect(upiti[0].vrijednosti).toEqual([BIZNIS, RAZGOVOR, '30']);
+  });
+
+  // Ovo je srž pravila: razgovor u kojem je zaposlenik stvarno odgovorio ostaje
+  // njegov zauvijek. Bez ovog uslova bi mu asistent upao u riječ.
+  it('preskače razgovore u kojima je čovjek već odgovorio', async () => {
+    odgovori = [[{ id: RAZGOVOR }]];
+    await vratiBotaAkoNikoNijeOdgovorio(BIZNIS, RAZGOVOR, 30);
+
+    expect(upiti[0].tekst).toContain('NOT EXISTS');
+    expect(upiti[0].tekst).toContain('m.sent_by IS NOT NULL');
+    expect(upiti[0].tekst).toContain("m.direction = 'outbound'");
+    expect(upiti[0].tekst).toContain('m.created_at >= c.updated_at');
+  });
+
+  it('ne dira bazu kad je povratak isključen', async () => {
+    await expect(vratiBotaAkoNikoNijeOdgovorio(BIZNIS, RAZGOVOR, 0)).resolves.toBe(false);
+    await expect(vratiBotaAkoNikoNijeOdgovorio(BIZNIS, RAZGOVOR, -5)).resolves.toBe(false);
+    expect(upiti).toHaveLength(0);
+  });
+
+  it('odbija neispravan conversation_id', async () => {
+    await expect(vratiBotaAkoNikoNijeOdgovorio(BIZNIS, 'nije-uuid', 30)).rejects.toThrow(
+      /conversationId/i,
+    );
     expect(upiti).toHaveLength(0);
   });
 });

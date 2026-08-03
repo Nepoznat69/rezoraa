@@ -32,6 +32,7 @@ import {
   type ServiceDefinition,
   type TenantContext,
 } from '../../domain/schemas.js';
+import { config } from '../../config.js';
 import { withConversationLock } from '../../infrastructure/database.js';
 import { logger } from '../../lib/logger.js';
 import { AiExtractor } from '../ai/extractor.js';
@@ -47,6 +48,7 @@ import {
   nadjiIliNapraviRazgovor,
   preuzeoCovjek,
   stanjeRazgovora,
+  vratiBotaAkoNikoNijeOdgovorio,
   zapisiDolaznuPoruku,
   zapisiOdlaznuPoruku,
 } from '../core-baza/core-repozitorij.js';
@@ -280,6 +282,21 @@ export class ConversationOrchestrator {
       });
       // Meta ponavlja webhookove; na ponovljenu poruku se ne odgovara drugi put.
       if (zapis.duplikat) return { reply: '', duplicate: true, handoff: false, intent: 'unknown' };
+
+      // Ako je razgovor predan čovjeku, a niko se nije javio u roku, asistent
+      // ga preuzima nazad. Bez ovoga jedno pogrešno prepoznato pitanje ušutka
+      // asistenta zauvijek.
+      await vratiBotaAkoNikoNijeOdgovorio(
+        businessId,
+        conversationId,
+        config.HANDOFF_POVRATAK_MINUTA,
+      ).catch((greska: unknown) => {
+        logger.warn('Povratak asistenta nije provjeren.', {
+          business_id: businessId,
+          conversation_id: conversationId,
+          greska: opisGreske(greska),
+        });
+      });
 
       // Kad je razgovor preuzeo čovjek, asistent mora šutjeti. Poruka je već
       // zapisana, pa je zaposlenik vidi u Inboxu.
