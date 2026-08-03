@@ -44,6 +44,7 @@ function coreKontekst(izmjene: Partial<Kontekst> = {}): Kontekst {
     radnoVrijeme: [
       { staffMemberId: ZAPOSLENIK, danUSedmici: 1, pocetak: '09:00', kraj: '17:00' },
     ],
+    znanje: [],
     ...izmjene,
   };
 }
@@ -121,10 +122,31 @@ describe('mapirajKontekst', () => {
     expect(kontekst.employees.map((zaposlenik) => zaposlenik.name)).toEqual(['Ana']);
   });
 
-  it('resurse i bazu znanja ostavlja prazne jer ih Core nema', () => {
-    const kontekst = mapirajKontekst(coreKontekst());
-    expect(kontekst.resources).toEqual([]);
-    expect(kontekst.knowledge).toEqual([]);
+  it('resurse ostavlja prazne jer ih Core nema', () => {
+    expect(mapirajKontekst(coreKontekst()).resources).toEqual([]);
+  });
+
+  // Bez ovoga asistent nije mogao odgovoriti na "koliko kosta sisanje" ni na
+  // "imate li parking" — usluge i radno vrijeme kazu sta salon RADI, a ovo sta
+  // ZNA. Prijenos je zato dio ugovora, a ne detalj.
+  it('prenosi bazu znanja iz Corea u oblik koji ocekuje AI sloj', () => {
+    const kontekst = mapirajKontekst(
+      coreKontekst({
+        znanje: [
+          { pitanje: 'Koliko kosta sisanje?', odgovor: 'Sisanje je 20 KM.' },
+          { pitanje: 'Imate li parking?', odgovor: 'Da, ispred salona.' },
+        ],
+      }),
+    );
+
+    expect(kontekst.knowledge).toEqual([
+      { question: 'Koliko kosta sisanje?', answer: 'Sisanje je 20 KM.' },
+      { question: 'Imate li parking?', answer: 'Da, ispred salona.' },
+    ]);
+  });
+
+  it('prazna baza znanja je prazan niz, ne greska', () => {
+    expect(mapirajKontekst(coreKontekst({ znanje: [] })).knowledge).toEqual([]);
   });
 
   it('koristi podrazumijevana pravila rezervisanja dok ih Core ne izlaže', () => {

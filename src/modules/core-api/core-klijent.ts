@@ -201,11 +201,18 @@ export interface RadnoVrijeme {
   kraj: string;
 }
 
+/** Jedno pitanje i odgovor koje je salon upisao za asistenta. */
+export interface StavkaZnanja {
+  pitanje: string;
+  odgovor: string;
+}
+
 export interface Kontekst {
   firma: PodaciFirme;
   usluge: Usluga[];
   zaposlenici: Zaposlenik[];
   radnoVrijeme: RadnoVrijeme[];
+  znanje: StavkaZnanja[];
 }
 
 export interface SlobodanTermin {
@@ -261,6 +268,12 @@ interface ZicaKontekst {
   services?: unknown;
   staff?: unknown;
   working_hours?: unknown;
+  knowledge?: unknown;
+}
+
+interface ZicaZnanje {
+  question?: unknown;
+  answer?: unknown;
 }
 
 interface ZicaTermin {
@@ -565,6 +578,13 @@ export async function dohvatiKontekst(businessId: string): Promise<Ishod<{ konte
             titula: jeTekst(red.title) ? red.title : null,
             aktivan: red.active !== false,
           }
+        : null,
+    ),
+    // Baza znanja je dodatak, ne uslov. Stariji Core je ne šalje i tada asistent
+    // radi kao i do sada — samo bez odgovora na "imate li parking".
+    znanje: nizOd<ZicaZnanje, StavkaZnanja>(tijelo.knowledge, (red) =>
+      jeTekst(red.question) && jeTekst(red.answer) && red.question.trim() && red.answer.trim()
+        ? { pitanje: red.question.trim(), odgovor: red.answer.trim() }
         : null,
     ),
     radnoVrijeme: nizOd<ZicaRadnoVrijeme, RadnoVrijeme>(tijelo.working_hours, (red) =>

@@ -92,9 +92,14 @@ export function mapirajKontekst(kontekst: Kontekst): TenantContext {
         configuration: { price_cents: usluga.cijenaCenti },
       })),
     employees: zaposlenici,
-    // Core nema resurse ni bazu znanja — prazno je tačan odgovor, ne propust.
+    // Core nema resurse — prazno je tačan odgovor, ne propust.
     resources: [],
-    knowledge: [],
+    // Ono što salon ZNA: cijene, parking, rade li djecu. Usluge i radno vrijeme
+    // opisuju šta salon radi; ovo odgovara na pitanja koja kupci stvarno šalju.
+    knowledge: kontekst.znanje.map((stavka) => ({
+      question: stavka.pitanje,
+      answer: stavka.odgovor,
+    })),
     // Radno vrijeme se do sada odbacivalo, pa asistent nije znao do kada se
     // radi ni kada je zadnji termin koji još stane u dan.
     workingHours: kontekst.radnoVrijeme.map((red) => ({
