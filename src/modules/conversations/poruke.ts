@@ -87,15 +87,99 @@ export function nabrojTermine(
   return `${satnice.slice(0, -1).join(', ')} i ${satnice[satnice.length - 1]}`;
 }
 
-/** Rečenica sa ponudom drugih termina, ili prijedlog drugog dana ako ih nema. */
+/**
+ * Šta je kupac tražio kad kaže „popodne", „oko 17h" ili „može li kasnije".
+ * Minute su od ponoći, u zoni salona.
+ */
+export interface ZeljenoVrijeme {
+  odMinuta?: number;
+  doMinuta?: number;
+  /** Traži kasnije nego što smo ponudili, bez konkretnog sata. */
+  kasnije?: boolean;
+}
+
+function minuteTermina(termin: SlobodanTermin, vremenskaZona: string): number | null {
+  const d = DateTime.fromISO(termin.startAt, { zone: 'utc' }).setZone(vremenskaZona);
+  return d.isValid ? d.hour * 60 + d.minute : null;
+}
+
+/**
+ * Prevodi ono što je AI izvukao u vremenski prozor.
+ *
+ * Bez ovoga se kupcu na „može li kasnije" i „imate li u 17h" vraćala ista tri
+ * jutarnja termina, pa je djelovalo kao da ga niko ne sluša.
+ */
+export function zeljeniProzor(startTime: string, izraz: string): ZeljenoVrijeme | null {
+  const tacno = /^(\d{1,2}):(\d{2})$/.exec((startTime ?? '').trim());
+  if (tacno) {
+    const m = Number(tacno[1]) * 60 + Number(tacno[2]);
+    // Sat i po oko traženog: dovoljno da ponudi blizu, a ne cijeli dan.
+    return { odMinuta: Math.max(0, m - 90), doMinuta: m + 90 };
+  }
+
+  const tekst = (izraz ?? '')
+    .toLocaleLowerCase('bs')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+  if (!tekst) return null;
+
+  if (/kasnij|poslije|nakon/.test(tekst)) return { kasnije: true };
+  if (/prije podne|prijepodne|ujutro|jutro|rano/.test(tekst)) return { doMinuta: 12 * 60 };
+  if (/navece|uvece|vece/.test(tekst)) return { odMinuta: 16 * 60 };
+  if (/popodne|poslije podne|poslijepodne/.test(tekst)) return { odMinuta: 12 * 60 };
+  return null;
+}
+
+function uProzoru(
+  termini: SlobodanTermin[],
+  vremenskaZona: string,
+  zelja: ZeljenoVrijeme | null,
+): SlobodanTermin[] {
+  if (!zelja || zelja.kasnije) return termini;
+  return termini.filter((t) => {
+    const m = minuteTermina(t, vremenskaZona);
+    if (m === null) return false;
+    if (zelja.odMinuta !== undefined && m < zelja.odMinuta) return false;
+    if (zelja.doMinuta !== undefined && m > zelja.doMinuta) return false;
+    return true;
+  });
+}
+
+/**
+ * Rečenica sa ponudom termina.
+ *
+ * Kad je kupac tražio određeno doba dana, nudi se ono što tu stvarno postoji.
+ * Ako u tom dijelu dana nema ničega, to se KAŽE i ponudi se najbliže — umjesto
+ * da se treći put ponovi ista jutarnja lista.
+ */
 export function ponudaAlternativa(
   termini: SlobodanTermin[],
   vremenskaZona: string,
+  zelja: ZeljenoVrijeme | null = null,
 ): string {
-  const spisak = nabrojTermine(termini, vremenskaZona);
-  return spisak
-    ? `Slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`
-    : 'Tog dana nemam više slobodnih termina. Recite mi koji drugi dan bi vam odgovarao.';
+  if (termini.length === 0) {
+    return 'Tog dana nemam više slobodnih termina. Recite mi koji drugi dan bi vam odgovarao.';
+  }
+
+  // „Može li kasnije" — nudi se kraj dana, ne opet početak.
+  if (zelja?.kasnije) {
+    const spisak = nabrojTermine(termini.slice(-3), vremenskaZona);
+    return `Kasnije tog dana slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`;
+  }
+
+  const uzi = uProzoru(termini, vremenskaZona, zelja);
+  if (uzi.length > 0) {
+    return `Slobodno je: ${nabrojTermine(uzi, vremenskaZona)}. Odgovara li vam neki od tih termina?`;
+  }
+
+  // Tražio je doba dana u kojem ničega nema. Reci to jasno i ponudi najbliže.
+  const zadnjiSat = sat(termini[termini.length - 1].startAt, vremenskaZona);
+  const najblizi = zelja?.odMinuta !== undefined ? termini.slice(-3) : termini.slice(0, 3);
+  const spisak = nabrojTermine(najblizi, vremenskaZona);
+  return (
+    `U to vrijeme nemamo slobodno — zadnji termin tog dana je u ${zadnjiSat}. ` +
+    `Slobodno je: ${spisak}. Odgovara li vam neki od tih termina?`
+  );
 }
 
 /**

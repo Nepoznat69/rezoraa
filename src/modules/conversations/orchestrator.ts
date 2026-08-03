@@ -57,6 +57,7 @@ import {
   PORUKA_PREUZEO_COVJEK,
   PORUKA_TEHNICKI_PROBLEM,
   ponudaAlternativa,
+  zeljeniProzor,
   porukaZaOdbijenTermin,
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
@@ -422,7 +423,12 @@ export class ConversationOrchestrator {
     const slobodni = await this.slobodniZaDan(okvir, datum, usluga?.id);
     if (!slobodni) return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
 
-    return odgovor(okvir, ponudaAlternativa(slobodni, tenant.timezone), {
+    // Ono što je kupac tražio („popodne", „oko 17h", „može li kasnije") mora
+    // odlučiti šta mu se nudi. Inače dobija ista tri jutarnja termina koliko
+    // god puta pitao, pa djeluje kao da ga niko ne sluša.
+    const zelja = zeljeniProzor(extraction.start_time, extraction.start_time_expression);
+
+    return odgovor(okvir, ponudaAlternativa(slobodni, tenant.timezone, zelja), {
       booking: { available: slobodni.length > 0 },
     });
   }
