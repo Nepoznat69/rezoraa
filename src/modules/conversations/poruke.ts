@@ -192,8 +192,9 @@ export function porukaZaOdbijenTermin(
   razlog: RazlogTermina | NepoznatRazlog,
   alternative: SlobodanTermin[],
   vremenskaZona: string,
+  zelja: ZeljenoVrijeme | null = null,
 ): string {
-  const ponuda = ponudaAlternativa(alternative, vremenskaZona);
+  const ponuda = ponudaAlternativa(alternative, vremenskaZona, zelja);
 
   switch (razlog) {
     case 'staffConflict':
@@ -223,8 +224,9 @@ export function porukaZaOdbijenoOtkazivanje(
 export function porukaZaZauzetTermin(
   alternative: SlobodanTermin[],
   vremenskaZona: string,
+  zelja: ZeljenoVrijeme | null = null,
 ): string {
-  return `Taj termin nije slobodan. ${ponudaAlternativa(alternative, vremenskaZona)}`;
+  return `Taj termin nije slobodan. ${ponudaAlternativa(alternative, vremenskaZona, zelja)}`;
 }
 
 /** Potvrda zakazanog termina. */
