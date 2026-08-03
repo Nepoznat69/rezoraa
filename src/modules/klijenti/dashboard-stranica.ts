@@ -42,11 +42,80 @@ export function renderDashboard(): { html: string; nonce: string } {
   .crveno { color: #c0392b; }
   code { background: #f0f5f3; padding: 3px 7px; border-radius: 6px; font-size: 12.5px; word-break: break-all; }
   .prazno { color: #7b9189; font-style: italic; padding: 16px 0; }
+
+  /* Super admin pregled preko svih salona */
+  .brojke { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 12px; }
+  .brojka { background: #f6faf8; border: 1px solid #e4efea; border-radius: 12px; padding: 14px 16px; }
+  .brojka b { display: block; font-size: 27px; line-height: 1.2; color: #14603f; font-variant-numeric: tabular-nums; }
+  .brojka span { display: block; margin-top: 3px; font-size: 12.5px; color: #5c7268; }
+  .filteri { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+  .filteri button { margin: 0; padding: 7px 14px; font-size: 13px; background: #e8f2ee; color: #1a5c44; }
+  .filteri button[aria-pressed="true"] { background: #1fae73; color: white; }
+  .tabela-omot { overflow-x: auto; }
+  .znacka { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap; background: #eef3f1; color: #45594f; }
+  .znacka.z-zakazano { background: #e6eefb; color: #23508f; }
+  .znacka.z-potvrdeno { background: #e2f6ec; color: #14603f; }
+  .znacka.z-utoku { background: #fdf1dc; color: #8a5c11; }
+  .znacka.z-zavrseno { background: #eaeef0; color: #46585f; }
+  .znacka.z-otkazano { background: #fdecec; color: #8d2020; }
+  .znacka.z-nedosao { background: #f6e6f2; color: #7a2a63; }
+  .znacka.z-bot { background: #e2f6ec; color: #14603f; }
+  .znacka.z-covjek { background: #fdf1dc; color: #8a5c11; }
+  .znacka.z-zatvoreno { background: #eaeef0; color: #46585f; }
+  .tiho { color: #7b9189; font-size: 12.5px; }
+  .zaglavlje { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
 <header><b>REZORA</b> — interni pregled klijenata</header>
 <main>
+
+  <section class="kartica">
+    <div class="zaglavlje">
+      <h2>Sažetak platforme</h2>
+      <button id="osvjezi" class="sporedno" type="button">Osvježi</button>
+    </div>
+    <p class="opis">
+      Brojevi sa svih salona zajedno, čitani uživo iz Rezora Core baze.
+      Vremena su u zoni Europe/Sarajevo.
+    </p>
+    <div class="brojke" id="brojke">
+      <div class="brojka"><b>—</b><span>Termini danas</span></div>
+      <div class="brojka"><b>—</b><span>Nadolazeći termini</span></div>
+      <div class="brojka"><b>—</b><span>Razgovora ukupno</span></div>
+      <div class="brojka"><b>—</b><span>Kod čovjeka</span></div>
+      <div class="brojka"><b>—</b><span>Aktivnih klijenata</span></div>
+    </div>
+    <div id="sazetakPoruka"></div>
+  </section>
+
+  <section class="kartica">
+    <h2>Rezervacije</h2>
+    <p class="opis">Termini svih salona na jednom mjestu. Salon u svom kalendaru vidi samo svoje — ovdje se vidi cijela platforma.</p>
+    <div class="filteri" id="filteri">
+      <button type="button" data-period="danas" aria-pressed="true">Danas</button>
+      <button type="button" data-period="sedmica" aria-pressed="false">Sedmica</button>
+      <button type="button" data-period="buduce" aria-pressed="false">Buduće</button>
+      <button type="button" data-period="sve" aria-pressed="false">Sve</button>
+    </div>
+    <div class="tabela-omot">
+      <table>
+        <thead><tr><th>Firma</th><th>Kupac</th><th>Usluga</th><th>Radnik</th><th>Vrijeme</th><th>Status</th></tr></thead>
+        <tbody id="rezervacije"><tr><td colspan="6" class="prazno">Učitavanje…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="kartica">
+    <h2>Razgovori</h2>
+    <p class="opis">Zadnje što se desilo u inboxu svakog salona. Brojevi su namjerno maskirani — za cijeli broj se ide u Core.</p>
+    <div class="tabela-omot">
+      <table>
+        <thead><tr><th>Firma</th><th>Kontakt</th><th>Zadnja poruka</th><th>Status</th><th>Vrijeme</th></tr></thead>
+        <tbody id="razgovori"><tr><td colspan="5" class="prazno">Učitavanje…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
 
   <section class="kartica">
     <h2>Dodaj klijenta</h2>
@@ -291,6 +360,169 @@ export function renderDashboard(): { html: string; nonce: string } {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // Super admin pregled: sve firme odjednom
+  //
+  // Sve ćelije se pune preko textContent, a klase značaka dolaze iz rječnika
+  // ispod — nijedna vrijednost iz baze ne ulazi u HTML kao oznaka.
+  // -------------------------------------------------------------------------
+  const brojke = document.getElementById('brojke');
+  const sazetakPoruka = document.getElementById('sazetakPoruka');
+  const filteri = document.getElementById('filteri');
+  const rezervacijeTijelo = document.getElementById('rezervacije');
+  const razgovoriTijelo = document.getElementById('razgovori');
+  const osvjezi = document.getElementById('osvjezi');
+  let period = 'danas';
+
+  const STATUS_TERMINA = {
+    scheduled: ['z-zakazano', 'Zakazano'],
+    confirmed: ['z-potvrdeno', 'Potvrđeno'],
+    in_progress: ['z-utoku', 'U toku'],
+    completed: ['z-zavrseno', 'Završeno'],
+    cancelled: ['z-otkazano', 'Otkazano'],
+    no_show: ['z-nedosao', 'Nije došao']
+  };
+
+  const STATUS_RAZGOVORA = {
+    bot: ['z-bot', 'Asistent'],
+    human: ['z-covjek', 'Kod čovjeka'],
+    closed: ['z-zatvoreno', 'Zatvoren']
+  };
+
+  function jednaCelija(tijelo, kolona, tekst) {
+    tijelo.innerHTML = '';
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = kolona;
+    td.className = 'prazno';
+    td.textContent = tekst;
+    tr.appendChild(td);
+    tijelo.appendChild(tr);
+  }
+
+  function celija(tekst) {
+    const td = document.createElement('td');
+    td.textContent = tekst === null || tekst === undefined || tekst === '' ? '—' : String(tekst);
+    return td;
+  }
+
+  function znacka(status, rjecnik) {
+    const td = document.createElement('td');
+    const span = document.createElement('span');
+    const opis = Object.prototype.hasOwnProperty.call(rjecnik, status) ? rjecnik[status] : null;
+    span.className = opis ? 'znacka ' + opis[0] : 'znacka';
+    span.textContent = opis ? opis[1] : String(status || 'nepoznato');
+    td.appendChild(span);
+    return td;
+  }
+
+  async function ucitajSazetak() {
+    try {
+      const response = await fetch('/dashboard/api/pregled/sazetak');
+      if (!response.ok) throw new Error('Sažetak se ne može učitati.');
+      const podaci = await response.json();
+      const stavke = [
+        [podaci.danas, 'Termini danas'],
+        [podaci.nadolazece, 'Nadolazeći termini'],
+        [podaci.ukupnoRazgovora, 'Razgovora ukupno'],
+        [podaci.razgovoriKodCovjeka, 'Kod čovjeka'],
+        [podaci.aktivnihKlijenata, 'Aktivnih klijenata']
+      ];
+      brojke.innerHTML = '';
+      for (const stavka of stavke) {
+        const kutija = document.createElement('div');
+        kutija.className = 'brojka';
+        const broj = document.createElement('b');
+        broj.textContent = String(stavka[0] === null || stavka[0] === undefined ? 0 : stavka[0]);
+        const natpis = document.createElement('span');
+        natpis.textContent = stavka[1];
+        kutija.append(broj, natpis);
+        brojke.appendChild(kutija);
+      }
+      sazetakPoruka.innerHTML = '';
+    } catch (error) {
+      poruka(sazetakPoruka, 'Sažetak se trenutno ne može učitati — provjeri vezu na Core bazu.', false);
+    }
+  }
+
+  async function ucitajRezervacije() {
+    jednaCelija(rezervacijeTijelo, 6, 'Učitavanje…');
+    try {
+      const response = await fetch('/dashboard/api/pregled/rezervacije?limit=50&period=' + encodeURIComponent(period));
+      if (!response.ok) throw new Error('Rezervacije se ne mogu učitati.');
+      const podaci = await response.json();
+      if (!podaci.length) {
+        jednaCelija(rezervacijeTijelo, 6, period === 'sve'
+          ? 'Nijedan salon još nema nijednu rezervaciju.'
+          : 'Za ovaj period nijedan salon nema zakazan termin.');
+        return;
+      }
+      rezervacijeTijelo.innerHTML = '';
+      for (const red of podaci) {
+        const tr = document.createElement('tr');
+        tr.append(
+          celija(red.firma),
+          celija(red.kupac),
+          celija(red.usluga),
+          celija(red.radnik),
+          celija(red.vrijeme),
+          znacka(red.status, STATUS_TERMINA)
+        );
+        rezervacijeTijelo.appendChild(tr);
+      }
+    } catch (error) {
+      jednaCelija(rezervacijeTijelo, 6, 'Rezervacije se trenutno ne mogu učitati — provjeri vezu na Core bazu.');
+    }
+  }
+
+  async function ucitajRazgovore() {
+    jednaCelija(razgovoriTijelo, 5, 'Učitavanje…');
+    try {
+      const response = await fetch('/dashboard/api/pregled/razgovori?limit=50');
+      if (!response.ok) throw new Error('Razgovori se ne mogu učitati.');
+      const podaci = await response.json();
+      if (!podaci.length) {
+        jednaCelija(razgovoriTijelo, 5, 'Još niko nije pisao nijednom salonu. Čim stigne prva poruka, pojavit će se ovdje.');
+        return;
+      }
+      razgovoriTijelo.innerHTML = '';
+      for (const red of podaci) {
+        const tr = document.createElement('tr');
+        const tdPoruka = celija(red.zadnjaPoruka || 'Bez poruka.');
+        if (red.zadnjiSmjer === 'outbound') tdPoruka.className = 'tiho';
+        tr.append(
+          celija(red.firma),
+          celija(red.kontakt),
+          tdPoruka,
+          znacka(red.status, STATUS_RAZGOVORA),
+          celija(red.vrijeme)
+        );
+        razgovoriTijelo.appendChild(tr);
+      }
+    } catch (error) {
+      jednaCelija(razgovoriTijelo, 5, 'Razgovori se trenutno ne mogu učitati — provjeri vezu na Core bazu.');
+    }
+  }
+
+  filteri.addEventListener('click', (dogadjaj) => {
+    const dugme = dogadjaj.target.closest('button[data-period]');
+    if (!dugme) return;
+    period = dugme.dataset.period;
+    for (const ostali of filteri.querySelectorAll('button[data-period]')) {
+      ostali.setAttribute('aria-pressed', String(ostali === dugme));
+    }
+    ucitajRezervacije();
+  });
+
+  osvjezi.addEventListener('click', () => {
+    ucitajSazetak();
+    ucitajRezervacije();
+    ucitajRazgovore();
+  });
+
+  ucitajSazetak();
+  ucitajRezervacije();
+  ucitajRazgovore();
   ucitajListu();
 </script>
 </body>

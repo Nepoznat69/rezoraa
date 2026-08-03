@@ -25,6 +25,13 @@ import {
   webhookAdresa,
   webhookPodaci,
 } from './modules/klijenti/klijenti-servis.js';
+import {
+  PERIODI,
+  razgovori,
+  rezervacije,
+  sazetak,
+  zatvoriPregledVezu,
+} from './modules/klijenti/pregled-servis.js';
 
 const app = Fastify({
   logger: false,
@@ -375,6 +382,36 @@ app.get('/dashboard', async (_request, reply) => {
 
 app.get('/dashboard/api/klijenti', async (_request, reply) => reply.send(await listaKlijenata()));
 
+// ---------------------------------------------------------------------------
+// Super admin pregled: sve firme odjednom
+//
+// Nije duplikat Coreovog kalendara — Core jednom salonu pokazuje njegov dan, a
+// ovo Rezorinom operateru pokazuje cijelu platformu. Isti izvor podataka (Core
+// baza), ništa se ne kopira. Rute stoje pod istom /dashboard basic auth
+// zaštitom kao i ostatak dashboarda (vidi onRequest hook iznad).
+// ---------------------------------------------------------------------------
+
+const PregledRezervacijeSchema = z.object({
+  period: z.enum(PERIODI).default('danas'),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+const PregledRazgovoriSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+app.get('/dashboard/api/pregled/sazetak', async (_request, reply) => reply.send(await sazetak()));
+
+app.get('/dashboard/api/pregled/rezervacije', async (request, reply) => {
+  const upitniParametri = PregledRezervacijeSchema.parse(request.query);
+  return reply.send(await rezervacije(upitniParametri));
+});
+
+app.get('/dashboard/api/pregled/razgovori', async (request, reply) => {
+  const upitniParametri = PregledRazgovoriSchema.parse(request.query);
+  return reply.send(await razgovori(upitniParametri));
+});
+
 const NoviKlijentSchema = z.object({
   naziv: z.string().min(1).max(120),
   slug: z.string().regex(/^[a-z0-9-]+$/, 'Oznaka smije imati samo mala slova, brojeve i crtice.').max(60),
@@ -454,6 +491,7 @@ async function shutdown(signal: string): Promise<void> {
   worker.stop();
   await app.close().catch(() => undefined);
   await zatvoriCoreVezu().catch(() => undefined);
+  await zatvoriPregledVezu().catch(() => undefined);
   await pool.end().catch(() => undefined);
   process.exit(0);
 }

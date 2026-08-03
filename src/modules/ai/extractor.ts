@@ -116,7 +116,18 @@ function deterministicFallback(input: ExtractionInput): AiExtraction {
   result.booking_id = text.match(/\bRZ-[A-Z0-9-]+\b/i)?.[0]?.toUpperCase() ?? '';
   result.customer_name = text.match(/(?:zovem se|na ime)\s+([\p{L}][\p{L}\s'-]{1,60})/iu)?.[1]?.trim() ?? '';
 
-  const service = input.tenant.services.find((item) => lower.includes(item.name.toLocaleLowerCase('bs')));
+  // Ljudi rijetko kucaju kvačice, pa se i poruka i naziv usluge porede bez njih:
+  // "sisanje" mora pogoditi uslugu "Šišanje".
+  const bezKvacica = (tekst: string): string =>
+    tekst
+      .toLocaleLowerCase('bs')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '');
+
+  const porukaBezKvacica = bezKvacica(text);
+  const service = input.tenant.services.find((item) =>
+    porukaBezKvacica.includes(bezKvacica(item.name)),
+  );
   if (service) result.service = service.name;
   result.reply = 'Razumio sam poruku. Provjeravam koje informacije su potrebne.';
   return result;
