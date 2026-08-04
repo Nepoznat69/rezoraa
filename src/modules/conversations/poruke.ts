@@ -422,3 +422,25 @@ export function porukaZaGrupu(
   const kada = clanovi.length ? opisTermina(clanovi[0].pocetak, vremenskaZona) : '';
   return `Zakazano ${kada}:\n${redovi.join('\n')}\n\nVidimo se!`;
 }
+
+/**
+ * Pitanje prije otkazivanja VISE termina odjednom.
+ *
+ * Grupa se zakaze jednom porukom, pa se mora moci i otkazati jednom porukom.
+ * Svaki clan se imenuje sa svojim brojem — kupac mora vidjeti sta tacno
+ * nestaje prije nego potvrdi.
+ */
+export function porukaZaPotvrduOtkazivanjaVise(
+  clanovi: Array<{ kod: string; ime: string; pocetak: string }>,
+  vremenskaZona: string,
+): string {
+  const redovi = clanovi.map((clan) => {
+    const ko = clan.ime.trim() ? `${clan.ime.trim()}: ` : '';
+    const broj = clan.kod.trim() ? ` (broj ${clan.kod.trim()})` : '';
+    return `• ${ko}${opisTermina(clan.pocetak, vremenskaZona)}${broj}`;
+  });
+  return (
+    `Otkazujem sve vaše termine:\n${redovi.join('\n')}\n\n` +
+    'Jeste li sigurni? Odgovorite sa "da" ako želite da ih poništim.'
+  );
+}

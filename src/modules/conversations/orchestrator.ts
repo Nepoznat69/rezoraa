@@ -77,6 +77,7 @@ import {
   porukaZaPomjerenTermin,
   porukaZaNepoznatuUslugu,
   porukaZaPotvrduOtkazivanja,
+  porukaZaPotvrduOtkazivanjaVise,
   porukaZaPotvrdjenTermin,
   porukaZaVecZauzetDan,
   porukaZaZauzetTermin,
@@ -234,6 +235,21 @@ function kodIzPoruke<T extends { kod: string }>(tekst: string, termini: T[]): T 
   );
 }
 
+/**
+ * Trazi li kupac da se radnja odnosi na SVE njegove termine.
+ *
+ * Grupa se zakaze jednom porukom, pa se mora moci i otkazati jednom porukom.
+ * Bez ovoga je "otkazujem oba termina" vracalo "koji od njih mislite?" i kupac
+ * je ostajao u krugu.
+ */
+function traziSve(tekst: string): boolean {
+  const t = tekst
+    .toLocaleLowerCase('bs')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  return /\b(sve|sva|svih|oba|obje|obadva|sve termine|oba termina)\b/.test(t);
+}
+
 /** Je li kupac odustao od onoga što je asistent pitao. */
 function jeOdustajanje(tekst: string): boolean {
   const t = tekst
@@ -248,6 +264,7 @@ function jeOdustajanje(tekst: string): boolean {
 /** Koji termin kupac misli: nađen, treba pitati, ili Core ne odgovara. */
 type NadjenTermin =
   | { vrsta: 'nadjen'; appointmentId: string; kod: string; ime: string; pocetak: string }
+  | { vrsta: 'svi'; termini: Array<{ appointmentId: string; kod: string; ime: string; pocetak: string }> }
   | { vrsta: 'pitanje'; tekst: string }
   | { vrsta: 'nedostupno' };
 
@@ -582,49 +599,73 @@ export class ConversationOrchestrator {
     await zaboravi();
 
     if (radnja.vrsta === 'otkazivanje') {
-      const ishod = await otkaziTermin({
-        businessId,
-        appointmentId: radnja.appointmentId,
-        razlog: 'customer',
-      });
-      if (ishod.ok) {
+      // Grupa se otkazuje redom. Ako jedan padne, kupcu se to KAZE — a ne da
+      // se javi uspjeh za sve pa da neko ipak dodje na termin koji stoji.
+      const otkazani: string[] = [];
+      const pali: string[] = [];
+      for (const [redni, id] of radnja.appointmentIds.entries()) {
+        const kod = radnja.kodovi[redni] ?? '';
+        const ishod = await otkaziTermin({ businessId, appointmentId: id, razlog: 'customer' });
+        if (ishod.ok) otkazani.push(kod);
+        else pali.push(kod);
+      }
+
+      if (otkazani.length === 0) {
         return {
-          reply:
-            `Termin ${radnja.kod} je otkazan. ` +
-            'Javite se kad vam bude odgovaralo novo vrijeme.',
+          reply: PORUKA_CORE_NEDOSTUPAN,
           duplicate: false,
           handoff: false,
           intent: 'cancel_booking',
-          booking: { appointmentId: radnja.appointmentId },
         };
       }
+
+      const popis = otkazani.filter(Boolean).join(', ');
+      const uspjeh =
+        otkazani.length === 1
+          ? `Termin ${popis} je otkazan.`
+          : `Otkazani su termini: ${popis}.`;
+      const upozorenje = pali.length
+        ? ` Termin ${pali.filter(Boolean).join(', ')} nisam uspio otkazati — javite nam se.`
+        : ' Javite se kad vam bude odgovaralo novo vrijeme.';
+
       return {
-        reply:
-          ishod.vrsta === 'odbijeno'
-            ? porukaZaOdbijenoOtkazivanje(ishod.razlog)
-            : PORUKA_CORE_NEDOSTUPAN,
+        reply: uspjeh + upozorenje,
         duplicate: false,
         handoff: false,
         intent: 'cancel_booking',
+        booking: { appointmentId: radnja.appointmentIds[0] },
       };
     }
 
     // Pomjeranje: novo vrijeme je već provjereno prije pitanja.
     const ishod = await pomjeriTermin({
       businessId,
-      appointmentId: radnja.appointmentId,
+      appointmentId: radnja.appointmentIds[0],
       startAt: radnja.novoVrijeme ?? '',
       endAt: '',
     });
     return {
       reply: ishod.ok
-        ? `Termin ${radnja.kod} je pomjeren.`
+        ? `Termin ${radnja.kodovi[0] ?? ''} je pomjeren.`.replace('  ', ' ')
         : PORUKA_CORE_NEDOSTUPAN,
       duplicate: false,
       handoff: false,
       intent: 'reschedule_booking',
-      booking: { appointmentId: radnja.appointmentId },
+      booking: { appointmentId: radnja.appointmentIds[0] },
     };
+  }
+
+  /** Pamti šta je asistent pitao; neuspjeh se prijavi, ali ne ruši odgovor. */
+  private async zapamtiPitanje(okvir: Okvir, radnja: CekanaRadnja): Promise<void> {
+    await zapamtiCekanuRadnju(okvir.businessId, okvir.conversationId, radnja).catch(
+      (greska: unknown) => {
+        logger.warn('Cekana potvrda nije zapisana.', {
+          business_id: okvir.businessId,
+          conversation_id: okvir.conversationId,
+          greska: opisGreske(greska),
+        });
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -660,22 +701,30 @@ export class ConversationOrchestrator {
     const nadjen = await this.nadjiTerminKupca(okvir);
     if (nadjen.vrsta === 'nedostupno') return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
     if (nadjen.vrsta === 'pitanje') return odgovor(okvir, nadjen.tekst);
+
+    if (nadjen.vrsta === 'svi') {
+      await this.zapamtiPitanje(okvir, {
+        vrsta: 'otkazivanje',
+        appointmentIds: nadjen.termini.map((t) => t.appointmentId),
+        kodovi: nadjen.termini.map((t) => t.kod),
+        pitanoU: new Date().toISOString(),
+      });
+      return odgovor(
+        okvir,
+        porukaZaPotvrduOtkazivanjaVise(nadjen.termini, okvir.tenant.timezone),
+      );
+    }
+
     const appointmentId = nadjen.appointmentId;
 
     // Otkazivanje se ne izvrsava na prvu rijec. Asistent kaze KOJI termin
     // otkazuje, sa njegovim brojem, i ceka potvrdu. Kupac koji je pogresno
     // shvacen tako ima gdje reci "ne" prije nego termin nestane.
-    await zapamtiCekanuRadnju(okvir.businessId, okvir.conversationId, {
+    await this.zapamtiPitanje(okvir, {
       vrsta: 'otkazivanje',
-      appointmentId,
-      kod: nadjen.kod,
+      appointmentIds: [appointmentId],
+      kodovi: [nadjen.kod],
       pitanoU: new Date().toISOString(),
-    }).catch((greska: unknown) => {
-      logger.warn('Cekana potvrda nije zapisana.', {
-        business_id: okvir.businessId,
-        conversation_id: okvir.conversationId,
-        greska: opisGreske(greska),
-      });
     });
 
     return odgovor(
@@ -910,6 +959,14 @@ export class ConversationOrchestrator {
     const nadjen = await this.nadjiTerminKupca(okvir);
     if (nadjen.vrsta === 'nedostupno') return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
     if (nadjen.vrsta === 'pitanje') return odgovor(okvir, nadjen.tekst);
+    // Pomjeranje svih odjednom nema jasno znacenje: dva termina su na razlicito
+    // vrijeme, pa "pomjeri sve na 14" ne moze biti tacno. Trazi se jedan.
+    if (nadjen.vrsta === 'svi') {
+      return odgovor(
+        okvir,
+        'Koji termin da pomjerim? Napišite njegov broj, pa novo vrijeme.',
+      );
+    }
     const appointmentId = nadjen.appointmentId;
 
     const sazetak = selectService(tenant, extraction.service || extraction.room_type);
@@ -1151,17 +1208,28 @@ export class ConversationOrchestrator {
       };
     }
 
+    // Kupac moze traziti da se radnja odnosi na sve njegove termine.
+    if (traziSve(okvir.message.text)) {
+      return { vrsta: 'svi', termini };
+    }
+
     const zona = okvir.tenant.timezone;
+    // Broj termina MORA biti u spisku: bez njega kupac nema cime odgovoriti
+    // osim opisom, a opis dva termina istog dana ne razlikuje pouzdano.
     const spisak = termini
       .slice(0, 5)
       .map((termin) => {
-        const usluga = termin.usluga ? ` (${termin.usluga.toLocaleLowerCase('bs')})` : '';
-        return `${opisTermina(termin.pocetak, zona)}${usluga}`;
+        const ko = termin.ime.trim() ? `${termin.ime.trim()}: ` : '';
+        const usluga = termin.usluga ? ` ${termin.usluga.toLocaleLowerCase('bs')}` : '';
+        const broj = termin.kod ? ` — broj ${termin.kod}` : '';
+        return `• ${ko}${opisTermina(termin.pocetak, zona)}${usluga}${broj}`;
       })
-      .join(', ');
+      .join('\n');
     return {
       vrsta: 'pitanje',
-      tekst: `Imate više termina: ${spisak}. Koji od njih mislite?`,
+      tekst:
+        `Imate više termina:\n${spisak}\n\n` +
+        'Napišite broj termina na koji mislite, ili "sve" ako mislite na sve.',
     };
   }
 

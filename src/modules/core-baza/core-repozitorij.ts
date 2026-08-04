@@ -540,8 +540,15 @@ export async function historijaRazgovora(
 
 export interface CekanaRadnja {
   vrsta: 'otkazivanje' | 'pomjeranje';
-  appointmentId: string;
-  kod: string;
+  /**
+   * Termini na koje se pitanje odnosi.
+   *
+   * Vise od jednog kad kupac trazi da otkaze SVE — grupa se onda otkazuje
+   * odjednom, jer je i zakazana odjednom. Ranije je "otkazujem oba" vracalo
+   * pitanje "koji od njih mislite?" i kupac je ostajao u krugu.
+   */
+  appointmentIds: string[];
+  kodovi: string[];
   /** UTC ISO trenutka kad je asistent pitao. */
   pitanoU: string;
   /** Novo vrijeme, samo kod pomjeranja. */
@@ -587,9 +594,12 @@ export async function cekanaRadnja(
   if (!sirovo || typeof sirovo !== 'object') return null;
 
   const radnja = sirovo as Partial<CekanaRadnja>;
+  const identifikatori = Array.isArray(radnja.appointmentIds)
+    ? radnja.appointmentIds.filter((id): id is string => typeof id === 'string')
+    : [];
   if (
     (radnja.vrsta !== 'otkazivanje' && radnja.vrsta !== 'pomjeranje') ||
-    typeof radnja.appointmentId !== 'string' ||
+    identifikatori.length === 0 ||
     typeof radnja.pitanoU !== 'string'
   ) {
     return null;
@@ -600,8 +610,10 @@ export async function cekanaRadnja(
 
   return {
     vrsta: radnja.vrsta,
-    appointmentId: radnja.appointmentId,
-    kod: typeof radnja.kod === 'string' ? radnja.kod : '',
+    appointmentIds: identifikatori,
+    kodovi: Array.isArray(radnja.kodovi)
+      ? radnja.kodovi.filter((k): k is string => typeof k === 'string')
+      : [],
     pitanoU: radnja.pitanoU,
     ...(typeof radnja.novoVrijeme === 'string' ? { novoVrijeme: radnja.novoVrijeme } : {}),
   };
