@@ -618,3 +618,88 @@ export async function cekanaRadnja(
     ...(typeof radnja.novoVrijeme === 'string' ? { novoVrijeme: radnja.novoVrijeme } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// 9. Šta je razgovor već utvrdio
+//
+// Rezervacija se sklapa kroz nekoliko poruka: „sutra u 13", pa „za mene i
+// ženu", pa „brijanje". Svaka poruka za sebe je nepotpuna, a asistent je svaku
+// čitao kao da je prva — pa je kupac koji je već rekao 13:00 dvije poruke
+// kasnije dobijao ponudu za 09:00.
+//
+// Historija razgovora ide modelu, ali ona je prijepis, ne odluka. Ovdje stoji
+// odluka: šta je utvrđeno i kada.
+// ---------------------------------------------------------------------------
+
+export interface PoznatiPodaci {
+  date?: string;
+  start_time?: string;
+  service?: string;
+  customer_name?: string;
+  /** UTC ISO trenutka zadnjeg upisa. Stariji kontekst se ne vraća u igru. */
+  upisanoU: string;
+}
+
+/**
+ * Koliko dugo ono što je kupac rekao vrijedi kao kontekst.
+ *
+ * Pola sata je granica poslije koje „sutra u 13" vjerovatno pripada nekom
+ * ranijem razgovoru, a ne ovom — a tiho dopunjavanje starim podatkom je gore
+ * od pitanja.
+ */
+export const ROK_POZNATIH_PODATAKA_MINUTA = 30;
+
+export async function zapamtiPoznatePodatke(
+  businessId: string,
+  conversationId: string,
+  podaci: PoznatiPodaci | null,
+): Promise<void> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  await upit(
+    `UPDATE public.conversations
+        SET known_slots = $3::jsonb
+      WHERE business_id = $1 AND id = $2`,
+    [biznis, razgovor, podaci ? JSON.stringify(podaci) : null],
+  );
+}
+
+/** Vraća utvrđene podatke samo ako još nisu istekli; inače `null`. */
+export async function poznatiPodaci(
+  businessId: string,
+  conversationId: string,
+): Promise<PoznatiPodaci | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  const redovi = await upit<{ known_slots: unknown }>(
+    `SELECT known_slots
+       FROM public.conversations
+      WHERE business_id = $1 AND id = $2
+      LIMIT 1`,
+    [biznis, razgovor],
+  );
+
+  const sirovo = redovi[0]?.known_slots;
+  if (!sirovo || typeof sirovo !== 'object') return null;
+
+  const podaci = sirovo as Partial<PoznatiPodaci>;
+  if (typeof podaci.upisanoU !== 'string') return null;
+
+  const proteklo = Date.now() - new Date(podaci.upisanoU).getTime();
+  if (!Number.isFinite(proteklo) || proteklo > ROK_POZNATIH_PODATAKA_MINUTA * 60_000) {
+    return null;
+  }
+
+  const tekst = (vrijednost: unknown): string | undefined =>
+    typeof vrijednost === 'string' && vrijednost.trim() ? vrijednost.trim() : undefined;
+
+  return {
+    ...(tekst(podaci.date) ? { date: tekst(podaci.date) } : {}),
+    ...(tekst(podaci.start_time) ? { start_time: tekst(podaci.start_time) } : {}),
+    ...(tekst(podaci.service) ? { service: tekst(podaci.service) } : {}),
+    ...(tekst(podaci.customer_name) ? { customer_name: tekst(podaci.customer_name) } : {}),
+    upisanoU: podaci.upisanoU,
+  };
+}

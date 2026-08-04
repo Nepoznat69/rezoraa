@@ -48,6 +48,9 @@ import {
 } from '../core-api/core-klijent.js';
 import {
   cekanaRadnja,
+  poznatiPodaci,
+  zapamtiPoznatePodatke,
+  type PoznatiPodaci,
   zapamtiCekanuRadnju,
   type CekanaRadnja,
   historijaRazgovora,
@@ -347,6 +350,42 @@ function jeGrupnaPosjeta(extraction: AiExtraction): boolean {
   return ucesnici.length === 1 && ucesnici[0].services.length > 1;
 }
 
+/**
+ * Dopunjava novu poruku onim što je razgovor već utvrdio.
+ *
+ * "Sutra u 13" pa "ja brijanje" su jedna rezervacija u dvije poruke. Druga
+ * poruka sama za sebe nema ni dan ni sat, pa je asistent nudio jutarnje
+ * termine iako je kupac rekao 13:00.
+ *
+ * Dopunjava se SAMO ono što nova poruka ne kaže. Kad kupac promijeni mišljenje
+ * — "ipak u 15" — novo uvijek pobjeđuje staro; inače bi ga kontekst zaključao
+ * u odluku od koje je odustao.
+ */
+function dopuniPoznatim(extraction: AiExtraction, poznato: PoznatiPodaci | null): void {
+  if (!poznato) return;
+  if (!extraction.date && !extraction.date_expression && poznato.date) {
+    extraction.date = poznato.date;
+  }
+  if (!extraction.start_time && !extraction.start_time_expression && poznato.start_time) {
+    extraction.start_time = poznato.start_time;
+  }
+  if (!extraction.service && poznato.service) extraction.service = poznato.service;
+  if (!extraction.customer_name && poznato.customer_name) {
+    extraction.customer_name = poznato.customer_name;
+  }
+}
+
+/** Šta iz ove poruke vrijedi zapamtiti za sljedeću. */
+function zaPamcenje(extraction: AiExtraction): PoznatiPodaci {
+  return {
+    ...(extraction.date ? { date: extraction.date } : {}),
+    ...(extraction.start_time ? { start_time: extraction.start_time } : {}),
+    ...(extraction.service ? { service: extraction.service } : {}),
+    ...(extraction.customer_name ? { customer_name: extraction.customer_name } : {}),
+    upisanoU: new Date().toISOString(),
+  };
+}
+
 /** Naziv i trajanje usluge za činjenice; bez usluge se o njoj ne govori. */
 function uslugaZaCinjenice(
   usluga: { name: string; defaultDurationMinutes: number } | null | undefined,
@@ -526,6 +565,11 @@ export class ConversationOrchestrator {
       });
     }
 
+    // Šta je razgovor već utvrdio. Model to dobija kao kontekst, a backend
+    // niže dopunjava ono što nova poruka ne kaže — jer se model ne može
+    // natjerati da svaki put ponovi isti sat.
+    const vecPoznato = await poznatiPodaci(businessId, conversationId).catch(() => null);
+
     let extraction: AiExtraction;
     try {
       extraction = await this.ai.extract({
@@ -534,7 +578,7 @@ export class ConversationOrchestrator {
         receivedAt: message.received_at,
         tenant,
         history,
-        knownSlots: {},
+        knownSlots: { ...(vecPoznato ?? {}) },
       });
     } catch (greska) {
       logger.error('AI sloj nije vratio razumijevanje poruke.', {
@@ -543,6 +587,20 @@ export class ConversationOrchestrator {
       });
       return { ...tiho(), reply: PORUKA_TEHNICKI_PROBLEM };
     }
+
+    dopuniPoznatim(extraction, vecPoznato);
+
+    // Zapamćeno vrijedi za sljedeću poruku. Neuspjeh se prijavi, ali razgovor
+    // se zbog njega ne prekida — asistent tad radi kao i prije.
+    await zapamtiPoznatePodatke(businessId, conversationId, zaPamcenje(extraction)).catch(
+      (greska: unknown) => {
+        logger.warn('Poznati podaci razgovora nisu zapisani.', {
+          business_id: businessId,
+          conversation_id: conversationId,
+          greska: opisGreske(greska),
+        });
+      },
+    );
 
     const okvir: Okvir = { businessId, conversationId, tenant, message, extraction };
 
