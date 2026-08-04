@@ -321,8 +321,18 @@ export function porukaZaPotvrdjenTermin(
 }
 
 /** Potvrda pomjerenog termina. */
-export function porukaZaPomjerenTermin(utcIso: string, vremenskaZona: string): string {
-  return `Termin je pomjeren ${opisTermina(utcIso, vremenskaZona)}. Vidimo se!`;
+export function porukaZaPomjerenTermin(
+  utcIso: string,
+  vremenskaZona: string,
+  kod = '',
+  gost = '',
+): string {
+  // U grupi je "Vas termin je pomjeren" premalo: kupac ima dva i ne zna koji
+  // se pomjerio. Broj i ime gosta se dopisuju samo kad postoje, pa obican
+  // termin za jednu osobu i dalje zvuci kao prije.
+  const ciji = gost.trim() ? ` za ${gost.trim()}` : '';
+  const oznaka = kod.trim() ? ` (broj ${kod.trim()})` : '';
+  return `Termin${ciji}${oznaka} je pomjeren ${opisTermina(utcIso, vremenskaZona)}. Vidimo se!`;
 }
 
 /**
@@ -373,10 +383,12 @@ export function porukaZaPotvrduOtkazivanja(
   kod: string,
   utcIso: string,
   vremenskaZona: string,
+  gost = '',
 ): string {
   const oznaka = kod.trim() ? ` (broj ${kod.trim()})` : '';
+  const ciji = gost.trim() ? ` za ${gost.trim()}` : '';
   return (
-    `Otkazujem vaš termin ${opisTermina(utcIso, vremenskaZona)}${oznaka}. ` +
+    `Otkazujem termin${ciji} ${opisTermina(utcIso, vremenskaZona)}${oznaka}. ` +
     'Jeste li sigurni? Odgovorite sa "da" ako želite da ga poništim.'
   );
 }

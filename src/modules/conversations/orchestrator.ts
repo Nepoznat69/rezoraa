@@ -247,7 +247,7 @@ function jeOdustajanje(tekst: string): boolean {
 
 /** Koji termin kupac misli: nađen, treba pitati, ili Core ne odgovara. */
 type NadjenTermin =
-  | { vrsta: 'nadjen'; appointmentId: string; kod: string; pocetak: string }
+  | { vrsta: 'nadjen'; appointmentId: string; kod: string; ime: string; pocetak: string }
   | { vrsta: 'pitanje'; tekst: string }
   | { vrsta: 'nedostupno' };
 
@@ -589,7 +589,9 @@ export class ConversationOrchestrator {
       });
       if (ishod.ok) {
         return {
-          reply: `Termin ${radnja.kod} je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.`,
+          reply:
+            `Termin ${radnja.kod} je otkazan. ` +
+            'Javite se kad vam bude odgovaralo novo vrijeme.',
           duplicate: false,
           handoff: false,
           intent: 'cancel_booking',
@@ -678,7 +680,12 @@ export class ConversationOrchestrator {
 
     return odgovor(
       okvir,
-      porukaZaPotvrduOtkazivanja(nadjen.kod, nadjen.pocetak, okvir.tenant.timezone),
+      porukaZaPotvrduOtkazivanja(
+        nadjen.kod,
+        nadjen.pocetak,
+        okvir.tenant.timezone,
+        nadjen.ime,
+      ),
       { booking: { appointmentId } },
     );
   }
@@ -908,6 +915,16 @@ export class ConversationOrchestrator {
     const sazetak = selectService(tenant, extraction.service || extraction.room_type);
     const usluga = sazetak ? mapService(tenant, sazetak) : zamjenskaUsluga(tenant);
 
+    // "Pomjeri TH4E6K na 14" ne sadrzi dan, i ne treba ga sadrzavati: kupac
+    // pomjera POSTOJECI termin, pa je dan onaj na koji termin vec stoji.
+    // Bez ovoga je asistent trazio dan koji je i sam mogao znati.
+    if (!extraction.date && !extraction.date_expression && nadjen.pocetak) {
+      const danTermina = DateTime.fromISO(nadjen.pocetak, { zone: 'utc' })
+        .setZone(tenant.timezone)
+        .toISODate();
+      if (danTermina) extraction.date = danTermina;
+    }
+
     const interval = resolveBookingInterval(extraction, usluga, message.received_at, tenant.timezone);
     if (!interval) {
       return odgovor(
@@ -948,20 +965,15 @@ export class ConversationOrchestrator {
     });
 
     if (ishod.ok) {
-      const tekst = await ljudski(
+      // Ova potvrda NE ide kroz AI sloj. Recenica nosi identitet — broj termina
+      // i za koga je — a model ju je prepisivao u "Vas termin je pomjeren",
+      // sto kupcu sa dva termina ne kaze nista. Provjera izmisljenog hvata
+      // pogresan sat, ali ne i ime koje je nestalo.
+      return odgovor(
         okvir,
-        porukaZaPomjerenTermin(termin.startAt, tenant.timezone),
-        {
-          vrsta: 'pomjereno',
-          datum: interval.localDate,
-          usluga: uslugaZaCinjenice(usluga),
-          terminUtc: termin.startAt,
-          staffMemberId: termin.staffMemberId,
-        },
+        porukaZaPomjerenTermin(termin.startAt, tenant.timezone, nadjen.kod, nadjen.ime),
+        { booking: { appointmentId: ishod.appointmentId, available: true } },
       );
-      return odgovor(okvir, tekst, {
-        booking: { appointmentId: ishod.appointmentId, available: true },
-      });
     }
     if (ishod.vrsta === 'odbijeno') {
       const ostalo = slobodni.filter((slot) => slot.startAt !== termin.startAt);
@@ -1091,7 +1103,9 @@ export class ConversationOrchestrator {
    */
   private async nadjiTerminKupca(okvir: Okvir): Promise<NadjenTermin> {
     const izPoruke = okvir.extraction.booking_id.trim();
-    if (jeUuid(izPoruke)) return { vrsta: 'nadjen', appointmentId: izPoruke, kod: '', pocetak: '' };
+    if (jeUuid(izPoruke)) {
+      return { vrsta: 'nadjen', appointmentId: izPoruke, kod: '', ime: '', pocetak: '' };
+    }
 
     const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
     if (!ishod.ok) {
@@ -1114,6 +1128,7 @@ export class ConversationOrchestrator {
         vrsta: 'nadjen',
         appointmentId: izgovoreni.appointmentId,
         kod: izgovoreni.kod,
+        ime: izgovoreni.ime,
         pocetak: izgovoreni.pocetak,
       };
     }
@@ -1131,6 +1146,7 @@ export class ConversationOrchestrator {
         vrsta: 'nadjen',
         appointmentId: termini[0].appointmentId,
         kod: termini[0].kod,
+        ime: termini[0].ime,
         pocetak: termini[0].pocetak,
       };
     }

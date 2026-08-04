@@ -1008,6 +1008,8 @@ export interface TerminKupca {
   appointmentId: string;
   /** Kratak kod koji kupac moze procitati i izgovoriti; UUID ne moze. */
   kod: string;
+  /** Za koga je termin, kad nije za onoga ko pise. Prazno = za njega. */
+  ime: string;
   pocetak: string;
   kraj: string;
   usluga: string;
@@ -1017,6 +1019,7 @@ export interface TerminKupca {
 interface ZicaTerminKupca {
   id?: unknown;
   reference?: unknown;
+  guest_name?: unknown;
   start_at?: unknown;
   end_at?: unknown;
   service_name?: unknown;
@@ -1055,6 +1058,7 @@ export async function nadolazeciTermini(
     return {
       appointmentId: red.id.trim(),
       kod: jeTekst(red.reference) ? red.reference.trim() : '',
+      ime: jeTekst(red.guest_name) ? red.guest_name.trim() : '',
       pocetak,
       kraj,
       usluga: jeTekst(red.service_name) ? red.service_name : '',

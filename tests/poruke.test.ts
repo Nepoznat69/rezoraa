@@ -21,6 +21,7 @@ import {
   porukaZaOdbijenTermin,
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
+  porukaZaPotvrduOtkazivanja,
   porukaZaPotvrdjenTermin,
   porukaZaZauzetTermin,
   sat,
@@ -200,5 +201,48 @@ describe('ponuda kad je kupac naveo tacan sat', () => {
   it('bez navedenog sata redoslijed ostaje netaknut', () => {
     const izbor = izaberiTermine(CIJELI_DAN, ZONA, null);
     expect(sat(izbor.ponudjeni[0].startAt, ZONA)).toBe('11:30');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Potvrda mora reci KOJI termin i CIJI je.
+//
+// U grupi kupac ima dva termina. "Vas termin je pomjeren" mu ne kaze koji se
+// pomjerio, a jedan je bio za kcerku — pa ne zna ni kome da javi.
+// ---------------------------------------------------------------------------
+
+describe('potvrda imenuje termin', () => {
+  const TERMIN = '2026-08-05T12:00:00.000Z'; // 14:00 lokalno
+
+  it('pomjeranje kaze broj i za koga je termin', () => {
+    const tekst = porukaZaPomjerenTermin(TERMIN, ZONA, 'BF5J79', 'Hena');
+
+    expect(tekst).toContain('BF5J79');
+    expect(tekst).toContain('Hena');
+    expect(tekst).toContain('14:00');
+  });
+
+  // Obican termin za jednu osobu ne smije zvucati sluzbenije nego prije.
+  it('bez broja i gosta recenica ostaje kratka kao i do sada', () => {
+    const tekst = porukaZaPomjerenTermin(TERMIN, ZONA);
+
+    expect(tekst).toContain('Termin je pomjeren');
+    expect(tekst).not.toContain('(broj');
+    expect(tekst).not.toContain(' za ');
+  });
+
+  it('otkazivanje pita za termin imenujuci gosta', () => {
+    const tekst = porukaZaPotvrduOtkazivanja('BF5J79', TERMIN, ZONA, 'Hena');
+
+    expect(tekst).toContain('BF5J79');
+    expect(tekst).toContain('Hena');
+    expect(tekst).toContain('Jeste li sigurni');
+  });
+
+  it('otkazivanje bez gosta ne izmislja ime', () => {
+    const tekst = porukaZaPotvrduOtkazivanja('RDM29Q', TERMIN, ZONA);
+
+    expect(tekst).toContain('RDM29Q');
+    expect(tekst).not.toContain(' za ');
   });
 });
