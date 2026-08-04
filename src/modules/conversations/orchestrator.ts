@@ -535,7 +535,14 @@ export class ConversationOrchestrator {
 
       case 'unknown':
       default:
-        return { ...odgovor(okvir, PORUKA_NERAZUMIJEVANJE), intent: 'unknown' };
+        // "Pozdrav" nije nerazumljiva poruka, a zavrsavala je ovdje i kupac je
+        // dobijao "nisam razumio". Kad je AI ipak sastavio recenicu, ona se
+        // koristi: rijeci ne diraju nijedan termin, pa je gore odbiti razgovor
+        // nego odgovoriti nesto obicno.
+        return {
+          ...odgovor(okvir, extraction.reply.trim() || PORUKA_NERAZUMIJEVANJE),
+          intent: 'unknown',
+        };
     }
   }
 
