@@ -30,6 +30,17 @@ export const AiExtractionSchema = z.object({
   duration_minutes: z.number().int().nonnegative(),
   party_size: z.number().int().nonnegative(),
   /**
+   * Odgovor na pitanje koje je kupac postavio USPUT, uz zahtjev za termin.
+   *
+   * "Koliko kosta farbanje i moze li sutra popodne" su dva pitanja u jednoj
+   * poruci. Rezervacijski tok odgovara na drugo, a prvo je prolazilo bez
+   * odgovora — kupac je pitao cijenu i nije je dobio.
+   *
+   * Popunjava se SAMO iz informacija biznisa i samo kad uz pitanje ide i
+   * zahtjev za termin. Prazno kad pitanja nema ili odgovor nije poznat.
+   */
+  side_answer: z.string(),
+  /**
    * Ko sve dolazi i sta ko hoce.
    *
    * Prazno znaci "samo onaj ko pise, jedna usluga" — sto je i dalje ogromna

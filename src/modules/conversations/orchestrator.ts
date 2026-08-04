@@ -417,13 +417,47 @@ function tiho(intent: AiExtraction['intent'] = 'unknown'): OrchestrationResult {
   return { reply: '', duplicate: false, handoff: false, intent };
 }
 
+/**
+ * Usputni odgovor ide PRIJE odgovora o terminu.
+ *
+ * "Koliko kosta farbanje i moze li sutra popodne" su dva pitanja u jednoj
+ * poruci. Rezervacijski tok je odgovarao samo na drugo, pa je kupac pitao
+ * cijenu i nije je dobio.
+ *
+ * Stoji ispred jer je to red kojim je kupac pitao, i jer ponuda termina zavrsava
+ * pitanjem — a na pitanje se odgovara odmah, ne poslije jos jednog odlomka.
+ */
+function saUsputnimOdgovorom(tekst: string, usputni: string): string {
+  const dodatak = usputni.trim();
+  if (!dodatak || tekst.includes(dodatak)) return tekst;
+  return `${dodatak}
+
+${tekst}`;
+}
+
+/**
+ * Namjere kod kojih se odgovara o TERMINU, pa usputno pitanje ostaje bez
+ * odgovora ako ga niko ne doda. Kod `general_question` odgovor AI sloja vec
+ * jeste odgovor na pitanje, tu se nista ne dopisuje.
+ */
+const NAMJERE_ZA_TERMIN = new Set<AiExtraction['intent']>([
+  'new_booking',
+  'check_availability',
+  'confirm_booking',
+  'reschedule_booking',
+  'cancel_booking',
+]);
+
 function odgovor(
   okvir: Okvir,
   reply: string,
   dodatno: Partial<OrchestrationResult> = {},
 ): OrchestrationResult {
+  const konacni = NAMJERE_ZA_TERMIN.has(okvir.extraction.intent)
+    ? saUsputnimOdgovorom(reply, okvir.extraction.side_answer)
+    : reply;
   return {
-    reply,
+    reply: konacni,
     duplicate: false,
     handoff: false,
     intent: okvir.extraction.intent,

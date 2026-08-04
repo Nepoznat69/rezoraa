@@ -20,6 +20,7 @@ const base = AiExtractionSchema.parse({
   duration_minutes: 0,
   party_size: 0,
   participants: [],
+  side_answer: '',
   quantity: 0,
   room_type: '',
   notes: '',
