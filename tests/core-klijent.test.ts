@@ -227,13 +227,13 @@ describe('napraviTermin — uspjeh', () => {
       staff_member_id: ZAPOSLENIK,
       notes: 'preko WhatsAppa',
     });
-    expect(ishod).toEqual({ ok: true, appointmentId: TERMIN, created: true });
+    expect(ishod).toEqual({ ok: true, appointmentId: TERMIN, kod: '', created: true });
   });
 
   it('created:false znači da je idempotency ključ već postojao', async () => {
     odgovori(200, { ok: true, appointment_id: TERMIN, created: false });
     const ishod = await napraviTermin(NOVI_TERMIN);
-    expect(ishod).toEqual({ ok: true, appointmentId: TERMIN, created: false });
+    expect(ishod).toEqual({ ok: true, appointmentId: TERMIN, kod: '', created: false });
   });
 
   it('bez idempotencyKey ne šalje ništa', async () => {

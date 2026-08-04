@@ -46,6 +46,9 @@ import {
   type SlobodanTermin,
 } from '../core-api/core-klijent.js';
 import {
+  cekanaRadnja,
+  zapamtiCekanuRadnju,
+  type CekanaRadnja,
   historijaRazgovora,
   nadjiIliNapraviRazgovor,
   preuzeoCovjek,
@@ -70,6 +73,7 @@ import {
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
   porukaZaNepoznatuUslugu,
+  porukaZaPotvrduOtkazivanja,
   porukaZaPotvrdjenTermin,
   porukaZaVecZauzetDan,
   porukaZaZauzetTermin,
@@ -189,9 +193,39 @@ interface Okvir {
   extraction: AiExtraction;
 }
 
+/**
+ * Je li kupac potvrdio ono što je asistent pitao.
+ *
+ * Namjerno kratka i doslovna lista. Ovo je pitanje na koje odgovor briše
+ * termin, pa se ne pogađa: sve što nije jasno "da" tretira se kao nova poruka,
+ * a ne kao pristanak.
+ */
+function jePotvrda(tekst: string): boolean {
+  const t = tekst
+    .toLocaleLowerCase('bs')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z ]/g, ' ')
+    .trim();
+  return /^(da|da da|dada|tako je|potvrdujem|potvrda|moze|ok|okej|u redu|jeste|naravno|slazem se|jesam siguran|siguran sam)$/.test(
+    t,
+  );
+}
+
+/** Je li kupac odustao od onoga što je asistent pitao. */
+function jeOdustajanje(tekst: string): boolean {
+  const t = tekst
+    .toLocaleLowerCase('bs')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z ]/g, ' ')
+    .trim();
+  return /^(ne|nemoj|odustajem|ipak ne|ne hvala|nista|pusti|otkazi to)$/.test(t);
+}
+
 /** Koji termin kupac misli: nađen, treba pitati, ili Core ne odgovara. */
 type NadjenTermin =
-  | { vrsta: 'nadjen'; appointmentId: string }
+  | { vrsta: 'nadjen'; appointmentId: string; kod: string; pocetak: string }
   | { vrsta: 'pitanje'; tekst: string }
   | { vrsta: 'nedostupno' };
 
@@ -208,6 +242,21 @@ function zeljaKupca(okvir: Okvir): ZeljenoVrijeme | null {
     okvir.extraction.start_time,
     okvir.extraction.start_time_expression || okvir.message.text,
   );
+}
+
+/**
+ * Broj termina se dopisuje na kraj, a ne prepušta AI sloju.
+ *
+ * Kupac ga mora dobiti svaki put — po njemu poslije otkazuje i pomjera. Da je
+ * dio rečenice koju sastavlja model, model bi ga povremeno izostavio, a kupac
+ * bez broja nema šta ni pročitati kad se javi.
+ */
+function saBrojemTermina(tekst: string, kod: string): string {
+  const ocisceno = kod.trim();
+  if (!ocisceno) return tekst;
+  return `${tekst}
+
+Broj vašeg termina: ${ocisceno}`;
 }
 
 /** Naziv i trajanje usluge za činjenice; bez usluge se o njoj ne govori. */
@@ -337,7 +386,12 @@ export class ConversationOrchestrator {
       return { ...tiho(), reply: PORUKA_TEHNICKI_PROBLEM };
     }
 
-    const rezultat = await this.odgovoriNaPoruku(businessId, conversationId, message);
+    // Ako je asistent nešto pitao, ova poruka je prvo odgovor na TO pitanje.
+    // Bez ovoga bi "da" bilo protumačeno kao nova rezervacija.
+    const naCekanju = await cekanaRadnja(businessId, conversationId).catch(() => null);
+    const rezultat = naCekanju
+      ? await this.odgovorNaPotvrdu(businessId, conversationId, message, naCekanju)
+      : await this.odgovoriNaPoruku(businessId, conversationId, message);
 
     if (rezultat.reply) {
       await zapisiOdlaznuPoruku({ businessId, conversationId, tekst: rezultat.reply }).catch(
@@ -450,6 +504,85 @@ export class ConversationOrchestrator {
     }
   }
 
+  /**
+   * Kupac odgovara na pitanje "jeste li sigurni".
+   *
+   * Tri ishoda: potvrdio je i radnja se izvršava; odustao je i zapis se briše;
+   * ili je napisao nešto treće — tada zapis pada i poruka se obrađuje normalno,
+   * jer je kupac očito prešao na drugu temu.
+   */
+  private async odgovorNaPotvrdu(
+    businessId: string,
+    conversationId: string,
+    message: NormalizedMessage,
+    radnja: CekanaRadnja,
+  ): Promise<OrchestrationResult> {
+    const zaboravi = (): Promise<void> =>
+      zapamtiCekanuRadnju(businessId, conversationId, null).catch(() => undefined);
+
+    if (jeOdustajanje(message.text)) {
+      await zaboravi();
+      return {
+        reply: 'U redu, termin ostaje kako jeste.',
+        duplicate: false,
+        handoff: false,
+        intent: 'confirm_booking',
+      };
+    }
+
+    if (!jePotvrda(message.text)) {
+      // Nije ni da ni ne — kupac je prešao na drugo. Pitanje se poništava da
+      // kasnije "da" ne bi obrisalo termin za koji kupac više i ne misli.
+      await zaboravi();
+      return this.odgovoriNaPoruku(businessId, conversationId, message);
+    }
+
+    await zaboravi();
+
+    if (radnja.vrsta === 'otkazivanje') {
+      const ishod = await otkaziTermin({
+        businessId,
+        appointmentId: radnja.appointmentId,
+        razlog: 'customer',
+      });
+      if (ishod.ok) {
+        return {
+          reply: `Termin ${radnja.kod} je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.`,
+          duplicate: false,
+          handoff: false,
+          intent: 'cancel_booking',
+          booking: { appointmentId: radnja.appointmentId },
+        };
+      }
+      return {
+        reply:
+          ishod.vrsta === 'odbijeno'
+            ? porukaZaOdbijenoOtkazivanje(ishod.razlog)
+            : PORUKA_CORE_NEDOSTUPAN,
+        duplicate: false,
+        handoff: false,
+        intent: 'cancel_booking',
+      };
+    }
+
+    // Pomjeranje: novo vrijeme je već provjereno prije pitanja.
+    const ishod = await pomjeriTermin({
+      businessId,
+      appointmentId: radnja.appointmentId,
+      startAt: radnja.novoVrijeme ?? '',
+      endAt: '',
+    });
+    return {
+      reply: ishod.ok
+        ? `Termin ${radnja.kod} je pomjeren.`
+        : PORUKA_CORE_NEDOSTUPAN,
+      duplicate: false,
+      handoff: false,
+      intent: 'reschedule_booking',
+      booking: { appointmentId: radnja.appointmentId },
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Čovjek preuzima razgovor
   // -------------------------------------------------------------------------
@@ -485,24 +618,27 @@ export class ConversationOrchestrator {
     if (nadjen.vrsta === 'pitanje') return odgovor(okvir, nadjen.tekst);
     const appointmentId = nadjen.appointmentId;
 
-    const ishod = await otkaziTermin({
-      businessId: okvir.businessId,
+    // Otkazivanje se ne izvrsava na prvu rijec. Asistent kaze KOJI termin
+    // otkazuje, sa njegovim brojem, i ceka potvrdu. Kupac koji je pogresno
+    // shvacen tako ima gdje reci "ne" prije nego termin nestane.
+    await zapamtiCekanuRadnju(okvir.businessId, okvir.conversationId, {
+      vrsta: 'otkazivanje',
       appointmentId,
-      razlog: 'customer',
+      kod: nadjen.kod,
+      pitanoU: new Date().toISOString(),
+    }).catch((greska: unknown) => {
+      logger.warn('Cekana potvrda nije zapisana.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        greska: opisGreske(greska),
+      });
     });
 
-    if (ishod.ok) {
-      const sablon = 'Termin je otkazan. Javite se kad vam bude odgovaralo novo vrijeme.';
-      return odgovor(okvir, await ljudski(okvir, sablon, { vrsta: 'otkazano' }), {
-        booking: { appointmentId },
-      });
-    }
-    if (ishod.vrsta === 'odbijeno') {
-      return odgovor(okvir, porukaZaOdbijenoOtkazivanje(ishod.razlog), {
-        booking: { appointmentId },
-      });
-    }
-    return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+    return odgovor(
+      okvir,
+      porukaZaPotvrduOtkazivanja(nadjen.kod, nadjen.pocetak, okvir.tenant.timezone),
+      { booking: { appointmentId } },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -660,6 +796,7 @@ export class ConversationOrchestrator {
 
     if (ishod.ok) {
       extraction.booking_id = ishod.appointmentId;
+      const kodTermina = ishod.kod;
       const tekst = await ljudski(
         okvir,
         porukaZaPotvrdjenTermin(termin.startAt, tenant.timezone, usluga.name),
@@ -671,7 +808,7 @@ export class ConversationOrchestrator {
           staffMemberId: termin.staffMemberId,
         },
       );
-      return odgovor(okvir, tekst, {
+      return odgovor(okvir, saBrojemTermina(tekst, kodTermina), {
         booking: { appointmentId: ishod.appointmentId, created: ishod.created, available: true },
       });
     }
@@ -819,7 +956,7 @@ export class ConversationOrchestrator {
    */
   private async nadjiTerminKupca(okvir: Okvir): Promise<NadjenTermin> {
     const izPoruke = okvir.extraction.booking_id.trim();
-    if (jeUuid(izPoruke)) return { vrsta: 'nadjen', appointmentId: izPoruke };
+    if (jeUuid(izPoruke)) return { vrsta: 'nadjen', appointmentId: izPoruke, kod: '', pocetak: '' };
 
     const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
     if (!ishod.ok) {
@@ -841,7 +978,12 @@ export class ConversationOrchestrator {
       };
     }
     if (termini.length === 1) {
-      return { vrsta: 'nadjen', appointmentId: termini[0].appointmentId };
+      return {
+        vrsta: 'nadjen',
+        appointmentId: termini[0].appointmentId,
+        kod: termini[0].kod,
+        pocetak: termini[0].pocetak,
+      };
     }
 
     const zona = okvir.tenant.timezone;

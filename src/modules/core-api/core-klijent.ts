@@ -159,7 +159,7 @@ export type Neuspjeh = TehnickiNeuspjeh;
 export type Ishod<T> = (T & { ok: true }) | TehnickiNeuspjeh;
 
 export type IshodTermina =
-  | { ok: true; appointmentId: string; created: boolean }
+  | { ok: true; appointmentId: string; kod: string; created: boolean }
   | OdbijenTermin
   | TehnickiNeuspjeh;
 
@@ -331,6 +331,7 @@ interface ZicaDostupnost {
 }
 
 interface ZicaTerminOdgovor {
+  reference?: unknown;
   ok?: unknown;
   appointment_id?: unknown;
   created?: unknown;
@@ -986,6 +987,7 @@ function terminIzOdgovora(
   return {
     ok: true,
     appointmentId,
+    kod: jeTekst(tijelo.reference) ? tijelo.reference.trim() : '',
     created: tijelo.created === true,
   };
 }
@@ -1004,6 +1006,8 @@ function terminIzOdgovora(
 
 export interface TerminKupca {
   appointmentId: string;
+  /** Kratak kod koji kupac moze procitati i izgovoriti; UUID ne moze. */
+  kod: string;
   pocetak: string;
   kraj: string;
   usluga: string;
@@ -1012,6 +1016,7 @@ export interface TerminKupca {
 
 interface ZicaTerminKupca {
   id?: unknown;
+  reference?: unknown;
   start_at?: unknown;
   end_at?: unknown;
   service_name?: unknown;
@@ -1049,6 +1054,7 @@ export async function nadolazeciTermini(
     if (!pocetak || !kraj) return null;
     return {
       appointmentId: red.id.trim(),
+      kod: jeTekst(red.reference) ? red.reference.trim() : '',
       pocetak,
       kraj,
       usluga: jeTekst(red.service_name) ? red.service_name : '',

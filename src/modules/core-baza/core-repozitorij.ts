@@ -526,3 +526,83 @@ export async function historijaRazgovora(
     }))
     .reverse();
 }
+
+// ---------------------------------------------------------------------------
+// 8. Šta asistent čeka od kupca
+//
+// Otkazivanje se ne izvršava na prvu riječ: asistent kaže KOJI termin otkazuje
+// i pita za potvrdu. Da bi sljedeću poruku razumio kao odgovor na to pitanje,
+// mora zapamtiti šta je pitao.
+//
+// Zapis ima vrijeme jer potvrda koja stigne sat kasnije nije potvrda nego nova
+// poruka — a „da" na staro pitanje ne smije otkazati termin.
+// ---------------------------------------------------------------------------
+
+export interface CekanaRadnja {
+  vrsta: 'otkazivanje' | 'pomjeranje';
+  appointmentId: string;
+  kod: string;
+  /** UTC ISO trenutka kad je asistent pitao. */
+  pitanoU: string;
+  /** Novo vrijeme, samo kod pomjeranja. */
+  novoVrijeme?: string;
+}
+
+/** Koliko dugo „da" vrijedi kao odgovor na pitanje asistenta. */
+export const ROK_POTVRDE_MINUTA = 10;
+
+export async function zapamtiCekanuRadnju(
+  businessId: string,
+  conversationId: string,
+  radnja: CekanaRadnja | null,
+): Promise<void> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  await upit(
+    `UPDATE public.conversations
+        SET pending_action = $3::jsonb
+      WHERE business_id = $1 AND id = $2`,
+    [biznis, razgovor, radnja ? JSON.stringify(radnja) : null],
+  );
+}
+
+/** Vraća čekanu radnju samo ako još nije istekla; inače `null`. */
+export async function cekanaRadnja(
+  businessId: string,
+  conversationId: string,
+): Promise<CekanaRadnja | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  const redovi = await upit<{ pending_action: unknown }>(
+    `SELECT pending_action
+       FROM public.conversations
+      WHERE business_id = $1 AND id = $2
+      LIMIT 1`,
+    [biznis, razgovor],
+  );
+
+  const sirovo = redovi[0]?.pending_action;
+  if (!sirovo || typeof sirovo !== 'object') return null;
+
+  const radnja = sirovo as Partial<CekanaRadnja>;
+  if (
+    (radnja.vrsta !== 'otkazivanje' && radnja.vrsta !== 'pomjeranje') ||
+    typeof radnja.appointmentId !== 'string' ||
+    typeof radnja.pitanoU !== 'string'
+  ) {
+    return null;
+  }
+
+  const proteklo = Date.now() - new Date(radnja.pitanoU).getTime();
+  if (!Number.isFinite(proteklo) || proteklo > ROK_POTVRDE_MINUTA * 60_000) return null;
+
+  return {
+    vrsta: radnja.vrsta,
+    appointmentId: radnja.appointmentId,
+    kod: typeof radnja.kod === 'string' ? radnja.kod : '',
+    pitanoU: radnja.pitanoU,
+    ...(typeof radnja.novoVrijeme === 'string' ? { novoVrijeme: radnja.novoVrijeme } : {}),
+  };
+}

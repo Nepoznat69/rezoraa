@@ -359,3 +359,24 @@ export function porukaZaNepoznatuUslugu(trazena: string, usluge: string[]): stri
     `Kod nas možete zakazati ${nabrojane}. Šta vam od toga odgovara?`
   );
 }
+
+/**
+ * Pitanje prije otkazivanja.
+ *
+ * Otkazivanje se ne poništava, pa kupac mora vidjeti KOJI termin nestaje prije
+ * nego što nestane. Broj termina je tu da se dva termina ne pomiješaju.
+ *
+ * Šablon, ne AI: jedina brojka je sat termina koji stvarno postoji, a rečenica
+ * mora biti ista svaki put — na pitanje koje briše podatak ne ide improvizacija.
+ */
+export function porukaZaPotvrduOtkazivanja(
+  kod: string,
+  utcIso: string,
+  vremenskaZona: string,
+): string {
+  const oznaka = kod.trim() ? ` (broj ${kod.trim()})` : '';
+  return (
+    `Otkazujem vaš termin ${opisTermina(utcIso, vremenskaZona)}${oznaka}. ` +
+    'Jeste li sigurni? Odgovorite sa "da" ako želite da ga poništim.'
+  );
+}
