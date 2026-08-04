@@ -215,6 +215,25 @@ function jePotvrda(tekst: string): boolean {
   );
 }
 
+/**
+ * Broj termina koji je kupac napisao, ako odgovara nekom njegovom terminu.
+ *
+ * Uporedjuje se samo sa terminima TOG kupca, pa pogodak ne moze pokazati na
+ * tudji termin ni kad neko pogodi ili prepise tudji kod.
+ *
+ * Bez kvacica i bez razlike u velicini slova: ljudi kod prepisuju kako stignu.
+ */
+function kodIzPoruke<T extends { kod: string }>(tekst: string, termini: T[]): T | null {
+  const gore = tekst.toUpperCase();
+  return (
+    termini.find((termin) => {
+      const kod = termin.kod.trim().toUpperCase();
+      // Kod je najmanje cetiri znaka; kraci bi se slucajno nasao u obicnoj rijeci.
+      return kod.length >= 4 && gore.includes(kod);
+    }) ?? null
+  );
+}
+
 /** Je li kupac odustao od onoga što je asistent pitao. */
 function jeOdustajanje(tekst: string): boolean {
   const t = tekst
@@ -1078,6 +1097,20 @@ export class ConversationOrchestrator {
     }
 
     const termini = ishod.termini;
+
+    // Kupac je rekao broj termina — to je tacan odgovor i nema se sta pitati.
+    // Trazi se u SIROVOJ poruci, ne u onome sto je AI izdvojio: kod je kratak
+    // niz slova i cifara i model ga povremeno ne prepozna kao identifikator.
+    const izgovoreni = kodIzPoruke(okvir.message.text, termini);
+    if (izgovoreni) {
+      return {
+        vrsta: 'nadjen',
+        appointmentId: izgovoreni.appointmentId,
+        kod: izgovoreni.kod,
+        pocetak: izgovoreni.pocetak,
+      };
+    }
+
     if (termini.length === 0) {
       return {
         vrsta: 'pitanje',
