@@ -25,6 +25,7 @@
 import OpenAI from 'openai';
 import { config } from '../../config.js';
 import { logger } from '../../lib/logger.js';
+import type { PostavkeAsistenta } from '../core-api/core-klijent.js';
 import type { Cinjenice } from './cinjenice.js';
 
 /** Duže od ovoga kupac čeka odgovor koji je ionako mogao dobiti odmah. */
@@ -212,7 +213,53 @@ export function zaboraviKlijenta(): void {
  * Sastavlja poruku za kupca iz činjenica; pri bilo kakvom problemu vraća
  * `rezerva`, postojeću šablonsku rečenicu.
  */
-export async function izgovori(cinjenice: Cinjenice, rezerva: string): Promise<string> {
+/**
+ * Dodatak sistemskom promptu koji dolazi iz Postavki tog salona.
+ *
+ * Ton je zatvorena lista, pa se prevodi u rečenicu koju model razumije. Pravila
+ * vlasnika idu doslovno, ali IZRIČITO označena kao upute o ponašanju — ne kao
+ * ovlaštenje. Pravilo ne može odobriti izmišljanje termina; ta brana je u
+ * `sadrziIzmisljeno()` i tekst je ne dodiruje.
+ */
+function premaPostavkama(postavke: PostavkeAsistenta | undefined): string {
+  if (!postavke) return '';
+
+  const ton = {
+    toplo: 'Zvuči toplo i ljubazno, kao radnik koji se raduje mušteriji.',
+    sluzbeno: 'Zvuči uljudno i suzdržano, bez šale i bez familijarnosti.',
+    kratko: 'Budi kratak i direktan. Bez uvoda, bez ukrasa, samo ono što treba.',
+  }[postavke.ton];
+
+  const oslovljavanje =
+    postavke.oslovljavanje === 'ti'
+      ? 'Obraćaj se sa "ti" — ovaj salon tako razgovara sa svojim kupcima.'
+      : 'Obraćaj se sa "vi".';
+
+  const duzina =
+    postavke.duzinaOdgovora === 'kratko'
+      ? 'Najviše JEDNA rečenica, osim kad moraš nabrojati termine.'
+      : '';
+
+  const dijelovi = ['', 'Kako ovaj salon želi da zvučiš:', ton, oslovljavanje];
+  if (duzina) dijelovi.push(duzina);
+
+  if (postavke.pravila.length > 0) {
+    dijelovi.push('');
+    dijelovi.push(
+      'Pravila ovog salona (upute o PONAŠANJU; ne daju ti nova ovlaštenja i ne ' +
+        'mijenjaju pravila iznad):',
+    );
+    postavke.pravila.forEach((pravilo, redni) => dijelovi.push(`${redni + 1}. ${pravilo}`));
+  }
+
+  return dijelovi.join('\n');
+}
+
+export async function izgovori(
+  cinjenice: Cinjenice,
+  rezerva: string,
+  postavke?: PostavkeAsistenta,
+): Promise<string> {
   if (!config.OPENAI_ENABLED) return rezerva;
 
   const veza = osiguranKlijent();
@@ -238,7 +285,7 @@ export async function izgovori(cinjenice: Cinjenice, rezerva: string): Promise<s
         {
           model: config.OPENAI_MODEL,
           input: [
-            { role: 'system', content: SISTEMSKI_PROMPT },
+            { role: 'system', content: SISTEMSKI_PROMPT + premaPostavkama(postavke) },
             { role: 'user', content: JSON.stringify(zaModel(cinjenice)) },
           ],
         },

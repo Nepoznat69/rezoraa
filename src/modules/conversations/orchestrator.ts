@@ -229,7 +229,12 @@ async function ljudski(
   sablon: string,
   ulaz: Omit<UlazCinjenica, 'tenant'>,
 ): Promise<string> {
-  return izgovori(sastaviCinjenice({ ...ulaz, tenant: okvir.tenant }), sablon);
+  // Ton, oslovljavanje i vlastita pravila tog salona idu uz činjenice.
+  return izgovori(
+    sastaviCinjenice({ ...ulaz, tenant: okvir.tenant }),
+    sablon,
+    okvir.tenant.postavke,
+  );
 }
 
 function tiho(intent: AiExtraction['intent'] = 'unknown'): OrchestrationResult {
@@ -297,10 +302,19 @@ export class ConversationOrchestrator {
       // Ako je razgovor predan čovjeku, a niko se nije javio u roku, asistent
       // ga preuzima nazad. Bez ovoga jedno pogrešno prepoznato pitanje ušutka
       // asistenta zauvijek.
+      //
+      // Rok bira vlasnik u Postavkama. Kontekst je keširan, pa ovo ne pravi
+      // dodatni poziv prema Coreu; ako ga nema, vrijedi vrijednost iz .env.
+      const kesiran = await kontekstZaBiznis(businessId).catch(() => null);
+      const povratakMinuta =
+        kesiran?.ok === true
+          ? kesiran.kontekst.postavke.povratakMinuta
+          : config.HANDOFF_POVRATAK_MINUTA;
+
       await vratiBotaAkoNikoNijeOdgovorio(
         businessId,
         conversationId,
-        config.HANDOFF_POVRATAK_MINUTA,
+        povratakMinuta,
       ).catch((greska: unknown) => {
         logger.warn('Povratak asistenta nije provjeren.', {
           business_id: businessId,
@@ -390,10 +404,23 @@ export class ConversationOrchestrator {
 
     const okvir: Okvir = { businessId, conversationId, tenant, message, extraction };
 
+    // Šta ovaj salon dozvoljava svom asistentu (Postavke → Asistent).
+    //
+    // Isključen prekidač NE znači da asistent ćuti nego da posao preda čovjeku.
+    // Kupac koji traži otkazivanje mora dobiti odgovor; koji odgovor, odlučuje
+    // vlasnik.
+    const smije = okvir.tenant.postavke;
+
     switch (extraction.intent) {
       case 'human_handoff':
-      case 'complaint':
         return this.predajCovjeku(okvir);
+
+      case 'complaint':
+        // Žalba ide čovjeku samo ako je vlasnik tako tražio; inače je to
+        // običan razgovor i asistent na njega odgovara.
+        return smije.predaja === 'zahtjev_i_zalbe'
+          ? this.predajCovjeku(okvir)
+          : odgovor(okvir, extraction.reply || PORUKA_NERAZUMIJEVANJE);
 
       case 'general_question':
         return odgovor(
@@ -402,20 +429,20 @@ export class ConversationOrchestrator {
         );
 
       case 'cancel_booking':
-        return this.otkazi(okvir);
+        return smije.smijeOtkazati ? this.otkazi(okvir) : this.predajCovjeku(okvir);
 
       case 'check_availability':
         return this.provjeriDostupnost(okvir);
 
       case 'reschedule_booking':
-        return this.pomjeri(okvir);
+        return smije.smijePomjeriti ? this.pomjeri(okvir) : this.predajCovjeku(okvir);
 
       case 'new_booking':
       // Core ne poznaje odvojenu "potvrdu": termin ili postoji ili ne postoji.
       // Potvrda sa konkretnim danom i satom je zato obično kreiranje termina, a
       // ako podaci nedostaju, ista grana ih zatraži.
       case 'confirm_booking':
-        return this.zakazi(okvir);
+        return smije.smijeZakazati ? this.zakazi(okvir) : this.predajCovjeku(okvir);
 
       case 'unknown':
       default:
@@ -428,6 +455,14 @@ export class ConversationOrchestrator {
   // -------------------------------------------------------------------------
 
   private async predajCovjeku(okvir: Okvir): Promise<OrchestrationResult> {
+    // Biznis koji nema kome proslijediti ne smije ostaviti kupca u tišini.
+    if (okvir.tenant.postavke.predaja === 'nikad') {
+      return odgovor(
+        okvir,
+        'To ne mogu sam riješiti. Javite nam se telefonom pa ćemo se dogovoriti.',
+      );
+    }
+
     try {
       await preuzeoCovjek(okvir.businessId, okvir.conversationId);
     } catch (greska) {
@@ -574,7 +609,9 @@ export class ConversationOrchestrator {
     // Bez ovoga je "Ok" poslije potvrde ponovo pokretalo zakazivanje: sat je u
     // medjuvremenu zauzeo njegov VLASTITI termin, pa mu je asistent javio da
     // nije slobodno ono sto mu je minut ranije potvrdio.
-    const vecIma = await this.terminTogDana(okvir, interval.localDate);
+    const vecIma = tenant.postavke.jednaRezervacijaDnevno
+      ? await this.terminTogDana(okvir, interval.localDate)
+      : null;
     if (vecIma) {
       const tekst =
         vecIma.pocetak === trazeni
