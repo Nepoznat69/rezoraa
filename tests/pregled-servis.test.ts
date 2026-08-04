@@ -210,9 +210,11 @@ describe('rezervacije preko svih firmi', () => {
       [
         {
           id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          kod: 'N5RQ2E',
           firma: 'Frizerski salon Ana',
           kupac: 'Emir Hodžić',
-          usluga: 'Šišanje',
+          gost: null,
+          usluge: 'Šišanje',
           radnik: 'Ana Marić',
           // 10:00 UTC = 12:00 po sarajevskom ljetnom vremenu
           start_at: new Date('2026-08-03T10:00:00.000Z'),
@@ -224,6 +226,7 @@ describe('rezervacije preko svih firmi', () => {
     const redovi = await rezervacije({ period: 'danas' });
     expect(redovi).toHaveLength(1);
     expect(redovi[0]).toMatchObject({
+      kod: 'N5RQ2E',
       firma: 'Frizerski salon Ana',
       kupac: 'Emir Hodžić',
       usluga: 'Šišanje',
@@ -235,7 +238,7 @@ describe('rezervacije preko svih firmi', () => {
     const upit = zadnji();
     expect(upit.tekst).toContain('JOIN public.businesses b ON b.id = a.business_id');
     expect(upit.tekst).toContain('LEFT JOIN public.clients k');
-    expect(upit.tekst).toContain('LEFT JOIN public.services u');
+    expect(upit.tekst).toContain('public.appointment_services x');
     expect(upit.tekst).toContain('LEFT JOIN public.staff_members r');
   });
 
@@ -348,5 +351,82 @@ describe('razgovori preko svih firmi', () => {
     expect(upit.tekst).toContain('ORDER BY m.created_at DESC');
     expect(upit.tekst).toContain('LIMIT 1');
     expect(upit.tekst).toContain('ORDER BY r.last_message_at DESC NULLS LAST');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Grupna rezervacija u pregledu.
+//
+// Dva termina jedne grupe dijele kupca koji ih je napravio, pa su bez imena
+// gosta izgledala kao dva termina iste osobe — a jedan je bio za kcerku.
+// ---------------------------------------------------------------------------
+
+describe('grupna rezervacija u pregledu', () => {
+  it('termin za gosta pise na gosta, uz onoga ko je rezervisao', async () => {
+    odgovori = [
+      [
+        {
+          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          kod: 'BF5J79',
+          firma: 'Rezora Demo',
+          kupac: 'Adna',
+          gost: 'Hena',
+          usluge: 'Šišanje',
+          radnik: 'Emir',
+          start_at: new Date('2026-08-05T10:00:00.000Z'),
+          status: 'scheduled',
+        },
+      ],
+    ];
+
+    const redovi = await rezervacije({ period: 'buduce' });
+    expect(redovi[0].kupac).toBe('Hena (rez. Adna)');
+  });
+
+  it('vise usluga jedne posjete se prikazuje zajedno', async () => {
+    odgovori = [
+      [
+        {
+          id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          kod: 'SNNVY6',
+          firma: 'Rezora Demo',
+          kupac: 'Amir',
+          gost: null,
+          usluge: 'Šišanje + Brijanje',
+          radnik: 'Emir',
+          start_at: new Date('2026-08-06T08:00:00.000Z'),
+          status: 'scheduled',
+        },
+      ],
+    ];
+
+    const redovi = await rezervacije({ period: 'buduce' });
+    expect(redovi[0].usluga).toBe('Šišanje + Brijanje');
+    expect(redovi[0].kupac).toBe('Amir');
+  });
+});
+
+describe('gost isti kao onaj ko rezervise', () => {
+  // Prvi clan grupe je onaj ko pise, pa mu se ime pojavi i kao gost. Bez ove
+  // provjere je pisalo "Adna (rez. Adna)".
+  it('ime se ne ponavlja', async () => {
+    odgovori = [
+      [
+        {
+          id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+          kod: 'RDM29Q',
+          firma: 'Rezora Demo',
+          kupac: 'Adna',
+          gost: 'Adna',
+          usluge: 'Farbanje',
+          radnik: 'Emir',
+          start_at: new Date('2026-08-05T09:00:00.000Z'),
+          status: 'scheduled',
+        },
+      ],
+    ];
+
+    const redovi = await rezervacije({ period: 'buduce' });
+    expect(redovi[0].kupac).toBe('Adna');
   });
 });

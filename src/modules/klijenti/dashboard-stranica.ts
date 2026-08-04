@@ -100,7 +100,7 @@ export function renderDashboard(): { html: string; nonce: string } {
     </div>
     <div class="tabela-omot">
       <table>
-        <thead><tr><th>Firma</th><th>Kupac</th><th>Usluga</th><th>Radnik</th><th>Vrijeme</th><th>Status</th></tr></thead>
+        <thead><tr><th>Broj</th><th>Firma</th><th>Za koga</th><th>Usluga</th><th>Radnik</th><th>Vrijeme</th><th>Status</th></tr></thead>
         <tbody id="rezervacije"><tr><td colspan="6" class="prazno">Učitavanje…</td></tr></tbody>
       </table>
     </div>
@@ -461,6 +461,7 @@ export function renderDashboard(): { html: string; nonce: string } {
       for (const red of podaci) {
         const tr = document.createElement('tr');
         tr.append(
+          celija(red.kod),
           celija(red.firma),
           celija(red.kupac),
           celija(red.usluga),

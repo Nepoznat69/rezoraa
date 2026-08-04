@@ -204,6 +204,8 @@ export async function sazetak(): Promise<Sazetak> {
 
 export interface RezervacijaRed {
   id: string;
+  /** Kratak kod koji kupac vidi na WhatsAppu; po njemu se javlja. */
+  kod: string;
   firma: string;
   kupac: string;
   usluga: string;
@@ -255,24 +257,33 @@ export async function rezervacije(opcije: {
 
   const redovi = await upit<{
     id: string;
+    kod: string | null;
     firma: string | null;
     kupac: string | null;
-    usluga: string | null;
+    gost: string | null;
+    usluge: string | null;
     radnik: string | null;
     start_at: Date | string | null;
     status: string | null;
   }>(
     `SELECT a.id,
+            a.reference AS kod,
             b.name AS firma,
             k.full_name AS kupac,
-            u.name AS usluga,
+            a.guest_name AS gost,
+            -- Sve usluge posjete, redom kojim ih je kupac rekao. Ranije se
+            -- prikazivala samo prva, pa je "sisanje + brijanje" izgledalo kao
+            -- obicno sisanje i raspored radnika nije imao smisla.
+            (SELECT string_agg(su.name, ' + ' ORDER BY x.position)
+               FROM public.appointment_services x
+               JOIN public.services su ON su.id = x.service_id
+              WHERE x.appointment_id = a.id) AS usluge,
             r.full_name AS radnik,
             a.start_at,
             a.status::text AS status
        FROM public.appointments a
        JOIN public.businesses b ON b.id = a.business_id
        LEFT JOIN public.clients k ON k.id = a.client_id
-       LEFT JOIN public.services u ON u.id = a.service_id
        LEFT JOIN public.staff_members r ON r.id = a.staff_member_id
       WHERE ${uslov}
       ORDER BY ${poredak}
@@ -288,11 +299,21 @@ export async function rezervacije(opcije: {
 
   return redovi.map((red) => {
     const vrijeme = uVrijemeSalona(red.start_at);
+    const gost = red.gost?.trim();
+    const kupac = red.kupac?.trim();
     return {
       id: red.id,
+      kod: red.kod?.trim() || '—',
       firma: red.firma?.trim() || 'Nepoznata firma',
-      kupac: red.kupac?.trim() || 'Nepoznat kupac',
-      usluga: red.usluga?.trim() || '—',
+      // Termin za gosta pise na gosta, uz onoga ko ga je rezervisao. Bez toga
+      // su dva termina jedne grupe izgledala kao dva termina iste osobe.
+      //
+      // Kad je gost isti kao onaj ko rezervise — a to je slucaj za prvog clana
+      // grupe — ime ide jednom. "Adna (rez. Adna)" nikome ne kaze nista.
+      kupac: gost && gost.toLocaleLowerCase('bs') !== (kupac ?? '').toLocaleLowerCase('bs')
+        ? `${gost}${kupac ? ` (rez. ${kupac})` : ''}`
+        : gost || kupac || 'Nepoznat kupac',
+      usluga: red.usluge?.trim() || '—',
       radnik: red.radnik?.trim() || '—',
       pocetak: vrijeme.iso,
       vrijeme: vrijeme.prikaz,
