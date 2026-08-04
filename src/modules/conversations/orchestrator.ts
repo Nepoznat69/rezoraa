@@ -120,19 +120,55 @@ function normalize(value: string): string {
     .trim();
 }
 
-function selectService(
+/**
+ * Korijen rijeci bez zavrsnog samoglasnika.
+ *
+ * Ljudi govore u padezima: "hocu brijanja", "dosao sam na sisanje". Poredjenje
+ * cijelih rijeci je zato promasivalo — "brijanja" ne sadrzi "brijanje" ni
+ * obrnuto — i asistent je odgovarao da uslugu ne radi, iako je radi.
+ *
+ * Skidaju se samo zavrsni samoglasnici, sto za nase nazive usluga daje
+ * stabilan korijen ("brijanj", "sisanj", "farbanj"). Kratki korijeni se ne
+ * koriste, da se "ma" iz jedne rijeci ne poklopi sa drugom.
+ */
+function korijen(vrijednost: string): string {
+  return normalize(vrijednost).replace(/[aeiou]+$/u, '');
+}
+
+// Izvezeno radi testova: prepoznavanje usluge iz kupceve rijeci je mjesto
+// gdje se najlakse potkrade greska, a u razgovoru se vidi tek kao "to ne
+// radimo" za uslugu koja se radi.
+export function selectService(
   context: TenantContext,
   requested: string,
 ): TenantContext['services'][number] | null {
   if (!requested && context.services.length === 1) return context.services[0];
   const wanted = normalize(requested);
   if (!wanted) return null;
+
+  const trazenKorijen = korijen(wanted);
   return (
     context.services.find((service) => normalize(service.name) === wanted) ??
-    context.services.find(
-      (service) =>
-        normalize(service.name).includes(wanted) || wanted.includes(normalize(service.name)),
-    ) ??
+    // Trazena rijec mora imati bar tri slova: "sa" se nalazi u "sisanje" i
+    // dvoslovni odlomak bi tako pogodio uslugu koju kupac nije spomenuo.
+    (wanted.length >= 3
+      ? context.services.find(
+          (service) =>
+            normalize(service.name).includes(wanted) || wanted.includes(normalize(service.name)),
+        )
+      : undefined) ??
+    // Tek na kraju padezi, da tacan naziv uvijek ima prednost.
+    (trazenKorijen.length >= 4
+      ? context.services.find((service) => {
+          const nazivKorijen = korijen(service.name);
+          return (
+            nazivKorijen.length >= 4 &&
+            (nazivKorijen === trazenKorijen ||
+              nazivKorijen.startsWith(trazenKorijen) ||
+              trazenKorijen.startsWith(nazivKorijen))
+          );
+        })
+      : undefined) ??
     null
   );
 }
@@ -1102,7 +1138,18 @@ export class ConversationOrchestrator {
         serviceIds.push(nadjena.id);
         nazivi.push(nadjena.name);
       }
-      if (serviceIds.length === 0) continue;
+      // Ucesnik bez usluge se NE preskace. Kupac je rekao "za mene i zenu, ona
+      // farbanje, ja ne znam sta" i dobio termin samo za zenu — tiho izbacen
+      // iz vlastite rezervacije. Djelimicna grupa ne smije proci kao uspjeh.
+      if (serviceIds.length === 0) {
+        const ko = ucesnik.name.trim();
+        return odgovor(
+          okvir,
+          ko
+            ? `Koju uslugu želi ${ko}?`
+            : 'A šta vi želite? Recite mi uslugu pa da vas oboje upišem.',
+        );
+      }
       ucesnici.push({ ime: ucesnik.name.trim(), serviceIds, naziviUsluga: nazivi });
     }
 
