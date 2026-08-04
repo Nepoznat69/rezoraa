@@ -42,6 +42,9 @@ export const AiExtractionSchema = z.object({
 
 export type AiExtraction = z.infer<typeof AiExtractionSchema>;
 
+import type { PostavkeAsistenta } from '../modules/core-api/core-klijent.js';
+export type { PostavkeAsistenta };
+
 export const NormalizedMessageSchema = z.object({
   event_id: z.string().min(1).max(255),
   /**
@@ -94,6 +97,8 @@ export interface TenantContext {
   employees: Array<{ id: string; name: string }>;
   resources: Array<{ id: string; name: string; type: string; capacity: number }>;
   knowledge: Array<{ question: string; answer: string }>;
+  /** Kako se asistent ponasa kod ovog klijenta (Postavke -> Asistent). */
+  postavke: PostavkeAsistenta;
   /**
    * Radno vrijeme osoblja iz Corea (`working_hours` u internom ugovoru).
    *

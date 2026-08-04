@@ -1,5 +1,7 @@
 {
+  "id": "rezoraRecepcioner01",
   "name": "Rezora recepcioner",
+  "active": false,
   "nodes": [
     {
       "parameters": {
@@ -12,7 +14,10 @@
       "name": "Poruka sa WhatsAppa",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-620, 300],
+      "position": [
+        -620,
+        300
+      ],
       "webhookId": "a1000000-0000-4000-8000-000000000001",
       "notes": "Gateway ovdje salje svaku dolaznu poruku, tek NAKON sto je provjerio Metin potpis, odbacio ponovljene isporuke i utvrdio kojem klijentu poruka pripada. Tijelo je uvijek isto: business_id, customer_phone, text, received_at."
     },
@@ -24,19 +29,31 @@
       "name": "Tvoja pravila prije odgovora",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-400, 300],
+      "position": [
+        -400,
+        300
+      ],
       "notes": "Prazan prolaz koji ne mijenja nista. Postoji da imas gdje upisati pravila specificna za jednog klijenta, bez diranja koda."
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
             {
               "id": "c1",
               "leftValue": "={{ $json.preskoci }}",
               "rightValue": true,
-              "operator": { "type": "boolean", "operation": "false", "singleValue": true }
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
             }
           ],
           "combinator": "and"
@@ -47,7 +64,10 @@
       "name": "Treba li odgovoriti?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [-180, 300]
+      "position": [
+        -180,
+        300
+      ]
     },
     {
       "parameters": {
@@ -56,19 +76,27 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "x-internal-api-key", "value": "={{ $env.INTERNAL_API_KEY }}" }
+            {
+              "name": "x-internal-api-key",
+              "value": "={{ $env.INTERNAL_API_KEY }}"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.poruka) }}",
-        "options": { "timeout": 60000 }
+        "options": {
+          "timeout": 60000
+        }
       },
       "id": "a1000000-0000-4000-8000-000000000004",
       "name": "Zakazivanje (Core upisuje)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [60, 200],
+      "position": [
+        60,
+        200
+      ],
       "notes": "OVDJE se rezervacija stvarno upisuje, i to preko Corea — ne iz n8n-a.\n\nProvjera slobodnog termina i upis moraju biti JEDAN potez. Kad bi n8n prvo pitao je li slobodno pa onda upisivao, izmedju ta dva koraka stane tudja rezervacija i dva kupca dobiju isti termin. Core to ne dozvoljava jer provjeru radi sama baza, u trenutku upisa.\n\nVraca: reply (tekst), intent, booking.\n\nAko hoces potpuno svoj tok, ovaj cvor mozes zamijeniti vlastitim pozivima na Coreov interni API (/api/internal/availability i /api/internal/appointments). Zadrzi pravilo da upis ide u jednom pozivu."
     },
     {
@@ -79,7 +107,10 @@
       "name": "Tvoje dotjerivanje teksta",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [280, 200],
+      "position": [
+        280,
+        200
+      ],
       "notes": "Jos jedan prazan prolaz. Tekst koji ovdje vratis je tacno ono sto kupac procita."
     },
     {
@@ -92,7 +123,10 @@
       "name": "Vrati odgovor gatewayu",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [500, 200],
+      "position": [
+        500,
+        200
+      ],
       "notes": "n8n NE salje poruku na WhatsApp. Vrati tekst, a gateway ga posalje.\n\nTako Metini kljucevi nikad ne izlaze iz gatewaya i ne moraju stajati ovdje."
     },
     {
@@ -103,7 +137,10 @@
       "name": "Bez odgovora",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [60, 420]
+      "position": [
+        60,
+        420
+      ]
     },
     {
       "parameters": {
@@ -115,32 +152,89 @@
       "name": "Vrati tisinu",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [280, 420]
+      "position": [
+        280,
+        420
+      ]
     }
   ],
   "connections": {
     "Poruka sa WhatsAppa": {
-      "main": [[{ "node": "Tvoja pravila prije odgovora", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Tvoja pravila prije odgovora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Tvoja pravila prije odgovora": {
-      "main": [[{ "node": "Treba li odgovoriti?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Treba li odgovoriti?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Treba li odgovoriti?": {
       "main": [
-        [{ "node": "Zakazivanje (Core upisuje)", "type": "main", "index": 0 }],
-        [{ "node": "Bez odgovora", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Zakazivanje (Core upisuje)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bez odgovora",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Zakazivanje (Core upisuje)": {
-      "main": [[{ "node": "Tvoje dotjerivanje teksta", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Tvoje dotjerivanje teksta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Tvoje dotjerivanje teksta": {
-      "main": [[{ "node": "Vrati odgovor gatewayu", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Vrati odgovor gatewayu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Bez odgovora": {
-      "main": [[{ "node": "Vrati tisinu", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Vrati tisinu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "pinData": {}
 }

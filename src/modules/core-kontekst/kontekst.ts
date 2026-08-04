@@ -76,7 +76,14 @@ export function mapirajKontekst(kontekst: Kontekst): TenantContext {
     businessType: kontekst.firma.vertikala,
     timezone: kontekst.firma.vremenskaZona,
     language: JEZIK,
-    bookingPolicy: { ...PODRAZUMIJEVANA_PRAVILA },
+    // Vise nije jedna konstanta za sve klijente: sta se trazi prije
+    // rezervacije i koliko unaprijed odlucuje vlasnik u Postavkama.
+    bookingPolicy: {
+      ...PODRAZUMIJEVANA_PRAVILA,
+      min_advance_minutes: kontekst.postavke.najranijeMinuta,
+      required_fields: kontekst.postavke.traziIme ? ['customer_name'] : [],
+    },
+    postavke: kontekst.postavke,
     services: kontekst.usluge
       .filter((usluga) => usluga.aktivna)
       .map((usluga) => ({

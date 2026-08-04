@@ -201,6 +201,47 @@ export interface RadnoVrijeme {
   kraj: string;
 }
 
+/**
+ * Kako se asistent ponasa kod ovog klijenta.
+ *
+ * Ovo su ZELJE, ne garancije. Zastita od dvostrukog bukiranja, ponovljenih
+ * poruka i razdvajanje klijenata su u kodu i u bazi i ovdje se ne mogu ugasiti
+ * — postavka koju kupac moze iskljuciti nije zastita.
+ */
+export interface PostavkeAsistenta {
+  ton: 'toplo' | 'sluzbeno' | 'kratko';
+  oslovljavanje: 'vi' | 'ti';
+  duzinaOdgovora: 'kratko' | 'standardno';
+  smijeZakazati: boolean;
+  smijePomjeriti: boolean;
+  smijeOtkazati: boolean;
+  predaja: 'na_zahtjev' | 'zahtjev_i_zalbe' | 'nikad';
+  povratakMinuta: number;
+  jednaRezervacijaDnevno: boolean;
+  traziIme: boolean;
+  najranijeMinuta: number;
+  pozdrav: string;
+  /** Pravila vlasnika, njegovim rijecima. Uputa o ponasanju, ne ovlastenje. */
+  pravila: string[];
+}
+
+/** Isto sto i podrazumijevano u migraciji 0015. */
+export const PODRAZUMIJEVANE_POSTAVKE: PostavkeAsistenta = {
+  ton: 'toplo',
+  oslovljavanje: 'vi',
+  duzinaOdgovora: 'standardno',
+  smijeZakazati: true,
+  smijePomjeriti: true,
+  smijeOtkazati: true,
+  predaja: 'na_zahtjev',
+  povratakMinuta: 30,
+  jednaRezervacijaDnevno: true,
+  traziIme: true,
+  najranijeMinuta: 60,
+  pozdrav: '',
+  pravila: [],
+};
+
 /** Jedno pitanje i odgovor koje je salon upisao za asistenta. */
 export interface StavkaZnanja {
   pitanje: string;
@@ -213,6 +254,7 @@ export interface Kontekst {
   zaposlenici: Zaposlenik[];
   radnoVrijeme: RadnoVrijeme[];
   znanje: StavkaZnanja[];
+  postavke: PostavkeAsistenta;
 }
 
 export interface SlobodanTermin {
@@ -269,6 +311,7 @@ interface ZicaKontekst {
   staff?: unknown;
   working_hours?: unknown;
   knowledge?: unknown;
+  assistant?: { settings?: unknown; rules?: unknown };
 }
 
 interface ZicaZnanje {
@@ -580,6 +623,9 @@ export async function dohvatiKontekst(businessId: string): Promise<Ishod<{ konte
           }
         : null,
     ),
+    // Stariji Core ne salje postavke; tada vrijedi podrazumijevano i asistent
+    // radi tacno kao i do sada.
+    postavke: postavkeIzOdgovora(tijelo.assistant),
     // Baza znanja je dodatak, ne uslov. Stariji Core je ne šalje i tada asistent
     // radi kao i do sada — samo bez odgovora na "imate li parking".
     znanje: nizOd<ZicaZnanje, StavkaZnanja>(tijelo.knowledge, (red) =>
@@ -603,6 +649,49 @@ export async function dohvatiKontekst(businessId: string): Promise<Ishod<{ konte
   };
 
   return { ok: true, kontekst };
+}
+
+/**
+ * Postavke sa zice u nas oblik, polje po polje.
+ *
+ * Svaka vrijednost se provjerava prema dozvoljenoj listi. Nepoznata vrijednost
+ * pada na podrazumijevanu umjesto da se proslijedi dalje — model ne smije
+ * dobiti ton koji ne postoji.
+ */
+function postavkeIzOdgovora(sirovo: unknown): PostavkeAsistenta {
+  const omot = objekat(sirovo);
+  const red = objekat(omot?.settings);
+  const pravila = Array.isArray(omot?.rules)
+    ? (omot.rules as unknown[]).filter(jeTekst).map((r) => r.trim()).filter(Boolean)
+    : [];
+
+  if (!red) return { ...PODRAZUMIJEVANE_POSTAVKE, pravila };
+
+  const izbor = <T extends string>(vrijednost: unknown, dozvoljeni: readonly T[], zadano: T): T =>
+    jeTekst(vrijednost) && (dozvoljeni as readonly string[]).includes(vrijednost)
+      ? (vrijednost as T)
+      : zadano;
+  const broj = (vrijednost: unknown, zadano: number): number =>
+    typeof vrijednost === 'number' && Number.isFinite(vrijednost) ? vrijednost : zadano;
+  const daNe = (vrijednost: unknown, zadano: boolean): boolean =>
+    typeof vrijednost === 'boolean' ? vrijednost : zadano;
+
+  const z = PODRAZUMIJEVANE_POSTAVKE;
+  return {
+    ton: izbor(red.tone, ['toplo', 'sluzbeno', 'kratko'] as const, z.ton),
+    oslovljavanje: izbor(red.address_form, ['vi', 'ti'] as const, z.oslovljavanje),
+    duzinaOdgovora: izbor(red.answer_length, ['kratko', 'standardno'] as const, z.duzinaOdgovora),
+    smijeZakazati: daNe(red.can_book, z.smijeZakazati),
+    smijePomjeriti: daNe(red.can_reschedule, z.smijePomjeriti),
+    smijeOtkazati: daNe(red.can_cancel, z.smijeOtkazati),
+    predaja: izbor(red.handoff_mode, ['na_zahtjev', 'zahtjev_i_zalbe', 'nikad'] as const, z.predaja),
+    povratakMinuta: broj(red.handoff_return_minutes, z.povratakMinuta),
+    jednaRezervacijaDnevno: daNe(red.one_booking_per_day, z.jednaRezervacijaDnevno),
+    traziIme: daNe(red.require_name, z.traziIme),
+    najranijeMinuta: broj(red.min_advance_minutes, z.najranijeMinuta),
+    pozdrav: jeTekst(red.welcome_message) ? red.welcome_message.trim() : z.pozdrav,
+    pravila,
+  };
 }
 
 function nizOd<Z, T>(sirovi: unknown, pretvori: (red: Z) => T | null): T[] {

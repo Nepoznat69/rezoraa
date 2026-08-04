@@ -25,6 +25,24 @@ import {
   ocistiKesKonteksta,
 } from '../src/modules/core-kontekst/kontekst.js';
 
+// Modul core-klijent je u ovom testu lažiran, pa se podrazumijevane postavke
+// pišu ovdje. Moraju odgovarati onima iz core-klijent.ts i migracije 0015.
+const PODRAZUMIJEVANE_POSTAVKE = {
+  ton: 'toplo' as const,
+  oslovljavanje: 'vi' as const,
+  duzinaOdgovora: 'standardno' as const,
+  smijeZakazati: true,
+  smijePomjeriti: true,
+  smijeOtkazati: true,
+  predaja: 'na_zahtjev' as const,
+  povratakMinuta: 30,
+  jednaRezervacijaDnevno: true,
+  traziIme: true,
+  najranijeMinuta: 60,
+  pozdrav: '',
+  pravila: [] as string[],
+};
+
 const BIZNIS = '11111111-1111-4111-8111-111111111111';
 const USLUGA = '22222222-2222-4222-8222-222222222222';
 const ZAPOSLENIK = '33333333-3333-4333-8333-333333333333';
@@ -45,6 +63,7 @@ function coreKontekst(izmjene: Partial<Kontekst> = {}): Kontekst {
       { staffMemberId: ZAPOSLENIK, danUSedmici: 1, pocetak: '09:00', kraj: '17:00' },
     ],
     znanje: [],
+    postavke: { ...PODRAZUMIJEVANE_POSTAVKE },
     ...izmjene,
   };
 }
@@ -230,5 +249,56 @@ describe('kontekstZaBiznis', () => {
     const uspjeh = await kontekstZaBiznis(BIZNIS, 1_001);
     expect(uspjeh.ok).toBe(true);
     expect(dohvatiKontekstMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pravila rezervisanja vise nisu ista za svakog klijenta.
+//
+// Do sada je `bookingPolicy` bila jedna konstanta u kodu, pa su automehanicar
+// i salon sa deset radnika dobijali identicna pravila. Sada dolaze iz Corea,
+// iz ekrana koji vlasnik sam mijenja.
+// ---------------------------------------------------------------------------
+
+describe('postavke asistenta po klijentu', () => {
+  it('koliko unaprijed se moze zakazati dolazi iz postavki', () => {
+    const kontekst = mapirajKontekst(
+      coreKontekst({
+        postavke: { ...PODRAZUMIJEVANE_POSTAVKE, najranijeMinuta: 240 },
+      }),
+    );
+
+    expect(kontekst.bookingPolicy.min_advance_minutes).toBe(240);
+  });
+
+  it('kad vlasnik ne trazi ime, ime nije obavezno polje', () => {
+    const trazi = mapirajKontekst(
+      coreKontekst({ postavke: { ...PODRAZUMIJEVANE_POSTAVKE, traziIme: true } }),
+    );
+    const neTrazi = mapirajKontekst(
+      coreKontekst({ postavke: { ...PODRAZUMIJEVANE_POSTAVKE, traziIme: false } }),
+    );
+
+    expect(trazi.bookingPolicy.required_fields).toEqual(['customer_name']);
+    expect(neTrazi.bookingPolicy.required_fields).toEqual([]);
+  });
+
+  it('postavke se prenose dalje netaknute', () => {
+    const kontekst = mapirajKontekst(
+      coreKontekst({
+        postavke: {
+          ...PODRAZUMIJEVANE_POSTAVKE,
+          ton: 'kratko',
+          oslovljavanje: 'ti',
+          smijeOtkazati: false,
+          pravila: ['Ne obecavaj cijene.'],
+        },
+      }),
+    );
+
+    expect(kontekst.postavke.ton).toBe('kratko');
+    expect(kontekst.postavke.oslovljavanje).toBe('ti');
+    expect(kontekst.postavke.smijeOtkazati).toBe(false);
+    expect(kontekst.postavke.pravila).toEqual(['Ne obecavaj cijene.']);
   });
 });
