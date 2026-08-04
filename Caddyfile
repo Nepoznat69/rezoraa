@@ -41,5 +41,13 @@
 		-Server
 	}
 
+	# n8n je u novijim izdanjima izbacio vlastitu osnovnu prijavu, pa bi bez
+	# ovoga i stranica za pravljenje prvog naloga bila otvorena svakome — a ko
+	# je prvi stigne, taj postane vlasnik. Zato lozinku trazi Caddy, prije nego
+	# sto zahtjev uopste dodje do n8n-a.
+	basic_auth {
+		{$N8N_KORISNIK} {$N8N_LOZINKA_HASH}
+	}
+
 	reverse_proxy n8n:5678
 }
