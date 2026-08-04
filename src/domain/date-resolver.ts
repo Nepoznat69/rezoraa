@@ -1,17 +1,25 @@
 import { DateTime } from 'luxon';
 import type { AiExtraction, ServiceDefinition } from './schemas.js';
 
-const weekdays: Record<string, number> = {
-  ponedjeljak: 1,
-  utorak: 2,
-  srijeda: 3,
-  sreda: 3,
-  cetvrtak: 4,
-  petak: 5,
-  subota: 6,
-  nedjelja: 7,
-  nedelja: 7,
-};
+/**
+ * Dani u sedmici sa padezima kojima ljudi zaista govore.
+ *
+ * "U srijedu", "u subotu" i "u nedjelju" su akuzativ, a lista je ranije imala
+ * samo nominativ — pa su tri dana od sedam prolazila neprepoznato i kupac je
+ * dobijao "recite mi na koji dan". Petak i utorak su radili slucajno, jer im
+ * je akuzativ jednak nominativu.
+ *
+ * Pisu se puni oblici, ne korijeni: "pet" bi se naslo u "petnaest".
+ */
+const DANI: Array<{ dan: number; oblici: string[] }> = [
+  { dan: 1, oblici: ['ponedjeljak', 'ponedjeljka', 'ponedjeljkom', 'ponedeljak', 'ponedeljkom'] },
+  { dan: 2, oblici: ['utorak', 'utorka', 'utorkom'] },
+  { dan: 3, oblici: ['srijedu', 'srijeda', 'srijede', 'srijedom', 'sredu', 'sreda', 'sredom'] },
+  { dan: 4, oblici: ['cetvrtak', 'cetvrtka', 'cetvrtkom'] },
+  { dan: 5, oblici: ['petak', 'petka', 'petkom'] },
+  { dan: 6, oblici: ['subotu', 'subota', 'subote', 'subotom'] },
+  { dan: 7, oblici: ['nedjelju', 'nedjelja', 'nedjelje', 'nedjeljom', 'nedelju', 'nedelja', 'nedeljom'] },
+];
 
 function normalize(value: string): string {
   return value
@@ -35,8 +43,8 @@ export function resolveBosnianDate(
   if (text.includes('sutra')) return reference.plus({ days: 1 }).toISODate();
   if (text.includes('danas')) return reference.toISODate();
 
-  for (const [name, weekday] of Object.entries(weekdays)) {
-    if (!text.includes(name)) continue;
+  for (const { dan: weekday, oblici } of DANI) {
+    if (!oblici.some((oblik) => text.includes(oblik))) continue;
     let days = (weekday - reference.weekday + 7) % 7;
     if (days === 0) days = 7;
     if (text.includes('sljedec') || text.includes('sledec')) days += 7;
