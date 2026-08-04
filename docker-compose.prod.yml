@@ -44,6 +44,52 @@ services:
         condition: service_healthy
     networks: [rezora]
 
+  # Tok razgovora koji vlasnik crta sam.
+  #
+  # Gateway i dalje prima Metin webhook (potpis, ponovljene isporuke, kojem
+  # klijentu poruka pripada) i dalje SAM salje odgovor na WhatsApp — n8n samo
+  # vrati tekst. Tako Metini kljucevi nikad ne izlaze iz gatewaya, a tok se
+  # moze mijenjati bez isporuke koda.
+  #
+  # Rezervacije NE upisuje n8n nego Coreov interni API: provjera slobodnog
+  # termina i upis moraju biti jedan potez, inace dvije poruke u istoj sekundi
+  # dobiju isti termin.
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: rezora-n8n
+    restart: always
+    environment:
+      N8N_HOST: ${N8N_DOMENA:?N8N_DOMENA mora biti postavljena u .env, npr. n8n.rezora.xyz}
+      WEBHOOK_URL: https://${N8N_DOMENA}/
+      N8N_PROTOCOL: https
+      N8N_PORT: 5678
+      # Caddy je jedini put izvana; n8n vidi samo njegov proxy.
+      N8N_PROXY_HOPS: 1
+      N8N_BASIC_AUTH_ACTIVE: 'true'
+      N8N_BASIC_AUTH_USER: ${N8N_KORISNIK:-rezora}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_LOZINKA:?N8N_LOZINKA mora biti postavljena u .env}
+      # Bez ovoga n8n cuva tokove u SQLite datoteci u kontejneru.
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: ${N8N_BAZA:-n8n}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-rezora}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY mora biti postavljen u .env}
+      GENERIC_TIMEZONE: Europe/Sarajevo
+      TZ: Europe/Sarajevo
+      N8N_DIAGNOSTICS_ENABLED: 'false'
+      # Tok zove gateway istim internim kljucem kao i sve ostalo. Bez ovog
+      # dopustenja n8n cvorovima ne da da procitaju vlastito okruzenje, pa bi
+      # kljuc morao biti otkucan u sam tok — a tok se izvozi i dijeli.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: 'false'
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?INTERNAL_API_KEY mora biti postavljen u .env}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [rezora]
+
   caddy:
     image: caddy:2-alpine
     container_name: rezora-caddy
@@ -53,11 +99,12 @@ services:
       - '443:443'
     environment:
       DOMENA: ${DOMENA:?DOMENA mora biti postavljena u .env, npr. api.rezora.xyz}
+      N8N_DOMENA: ${N8N_DOMENA:?N8N_DOMENA mora biti postavljena u .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on: [app]
+    depends_on: [app, n8n]
     networks: [rezora]
 
   # Docker sam vraća kontejner koji se ugasi, ali ne i onaj koji se zaglavi —
@@ -75,6 +122,7 @@ services:
 
 volumes:
   rezora_postgres_data:
+  n8n_data:
   caddy_data:
   caddy_config:
 

@@ -25,3 +25,21 @@
 		format console
 	}
 }
+
+# Tokovi razgovora. Zaseban domen, a ne putanja na api domenu: n8n gradi
+# vlastite webhook adrese iz svog imena hosta, pa mu je najurednije dati ga.
+#
+# Ovo je alat za upravljanje, ne javni servis — iza Caddya stoji jos i n8n-ova
+# vlastita lozinka, a stranica se ne indeksira.
+{$N8N_DOMENA} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	reverse_proxy n8n:5678
+}
