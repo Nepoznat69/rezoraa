@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Sta je stiglo. Odavde krecu tvoja pravila.\n//\n// Sve sto ti treba je u `poruka`:\n//   business_id      koji salon\n//   customer_phone   ko pise (po ovome ga prepoznajemo)\n//   text             sta je napisao\n//   received_at      kada\n//\n// Ovdje mozes dodati vlastito skretanje prije nego sto asistent uopste\n// odgovori. Primjer koji je odmah upotrebljiv:\n//\n//   const van = ['spam', 'reklama'];\n//   if (van.some((r) => poruka.text.toLowerCase().includes(r))) {\n//     return [{ json: { preskoci: true, poruka } }];\n//   }\n\nconst poruka = $input.first().json;\n\nreturn [{ json: { preskoci: false, poruka } }];"
+        "jsCode": "// Sta je stiglo. Odavde krecu tvoja pravila.\n//\n// Webhook cvor ne vraca samo poruku nego omot: { headers, params, query,\n// body }. Poruka gatewaya je u `body`. Bez ovoga su sva polja bila prazna\n// i gateway je odbijao zahtjev kao neispravan.\n//\n// Sve sto ti treba je u `poruka`:\n//   business_id      koji salon\n//   customer_phone   ko pise (po ovome ga prepoznajemo)\n//   text             sta je napisao\n//   received_at      kada\n//\n// Ovdje mozes dodati vlastito skretanje prije nego sto asistent odgovori:\n//\n//   const van = ['spam', 'reklama'];\n//   if (van.some((r) => poruka.text.toLowerCase().includes(r))) {\n//     return [{ json: { preskoci: true, poruka } }];\n//   }\n\nconst stiglo = $input.first().json;\nconst poruka = stiglo.body ?? stiglo;\n\nreturn [{ json: { preskoci: false, poruka } }];"
       },
       "id": "a1000000-0000-4000-8000-000000000002",
       "name": "Tvoja pravila prije odgovora",
@@ -84,7 +84,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json.poruka) }}",
+        "jsonBody": "={{ $json.poruka }}",
         "options": {
           "timeout": 60000
         }
