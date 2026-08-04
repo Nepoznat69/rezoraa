@@ -38,6 +38,7 @@ import { withConversationLock } from '../../infrastructure/database.js';
 import { logger } from '../../lib/logger.js';
 import { AiExtractor } from '../ai/extractor.js';
 import {
+  napraviGrupu,
   napraviTermin,
   otkaziTermin,
   pomjeriTermin,
@@ -69,6 +70,8 @@ import {
   ponudaAlternativa,
   zeljeniProzor,
   type ZeljenoVrijeme,
+  porukaZaGrupu,
+  type ClanZaPotvrdu,
   porukaZaOdbijenTermin,
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
@@ -257,6 +260,19 @@ function saBrojemTermina(tekst: string, kod: string): string {
   return `${tekst}
 
 Broj vašeg termina: ${ocisceno}`;
+}
+
+/**
+ * Je li kupac tražio nešto što jedan običan termin ne pokriva.
+ *
+ * Dva slučaja: dolazi još neko, ili jedna osoba hoće više usluga. Sve ostalo
+ * ide starim putem — a to je i dalje ogromna većina poruka, pa se najčešći tok
+ * ne dira.
+ */
+function jeGrupnaPosjeta(extraction: AiExtraction): boolean {
+  const ucesnici = extraction.participants ?? [];
+  if (ucesnici.length > 1) return true;
+  return ucesnici.length === 1 && ucesnici[0].services.length > 1;
 }
 
 /** Naziv i trajanje usluge za činjenice; bez usluge se o njoj ne govori. */
@@ -696,6 +712,9 @@ export class ConversationOrchestrator {
     const { tenant, extraction, message } = okvir;
     if (tenant.services.length === 0) return this.bezUsluga(okvir);
 
+    // Više ljudi ili više usluga ne stane u jedan termin — ide drugim putem.
+    if (jeGrupnaPosjeta(extraction)) return this.zakaziGrupu(okvir);
+
     const trazenaUsluga = (extraction.service || extraction.room_type).trim();
     const sazetak = selectService(tenant, trazenaUsluga);
     const usluga = sazetak ? mapService(tenant, sazetak) : null;
@@ -943,6 +962,96 @@ export class ConversationOrchestrator {
   // -------------------------------------------------------------------------
   // Zajedničko
   // -------------------------------------------------------------------------
+
+  /**
+   * Zakazivanje posjete koja ima više usluga ili više ljudi.
+   *
+   * Raspored i trajanja odlučuje Core: on zna koliko koja usluga traje i ko je
+   * kad slobodan. Ovdje se samo prevode nazivi usluga koje je kupac izgovorio
+   * u prave usluge tog salona, i javi ako neku ne radimo.
+   */
+  private async zakaziGrupu(okvir: Okvir): Promise<OrchestrationResult> {
+    const { tenant, extraction, message } = okvir;
+    if (tenant.services.length === 0) return this.bezUsluga(okvir);
+
+    const interval = resolveBookingInterval(
+      extraction,
+      zamjenskaUsluga(tenant),
+      message.received_at,
+      tenant.timezone,
+    );
+    if (!interval) {
+      return odgovor(
+        okvir,
+        'Recite mi na koji dan i sat da vas upišem, na primjer "sutra u 14:30".',
+      );
+    }
+
+    // Naziv koji je kupac rekao mora postojati u ovom salonu. Nepoznatu uslugu
+    // ne preskačemo tiho nego kažemo šta radimo.
+    const ucesnici: Array<{ ime: string; serviceIds: string[]; naziviUsluga: string[] }> = [];
+    for (const ucesnik of extraction.participants ?? []) {
+      const serviceIds: string[] = [];
+      const nazivi: string[] = [];
+      for (const trazena of ucesnik.services) {
+        const nadjena = selectService(tenant, trazena);
+        if (!nadjena) {
+          return odgovor(
+            okvir,
+            porukaZaNepoznatuUslugu(
+              trazena,
+              tenant.services.map((stavka) => stavka.name),
+            ),
+          );
+        }
+        serviceIds.push(nadjena.id);
+        nazivi.push(nadjena.name);
+      }
+      if (serviceIds.length === 0) continue;
+      ucesnici.push({ ime: ucesnik.name.trim(), serviceIds, naziviUsluga: nazivi });
+    }
+
+    if (ucesnici.length === 0) {
+      return odgovor(okvir, questionForMissingField('service'));
+    }
+    if (!extraction.customer_name && tenant.postavke.traziIme) {
+      return odgovor(okvir, questionForMissingField('customer_name'));
+    }
+
+    const ishod = await napraviGrupu({
+      businessId: okvir.businessId,
+      startAt: interval.startsAt.toISOString(),
+      klijent: { ime: extraction.customer_name, telefon: message.customer_phone },
+      ucesnici: ucesnici.map((u) => ({ ime: u.ime, serviceIds: u.serviceIds })),
+    });
+
+    if (!ishod.ok) {
+      if (ishod.vrsta === 'odbijeno') {
+        // Djelimična grupa ne postoji: ili svi stanu ili niko. Kupcu se nudi
+        // drugi termin umjesto polovične potvrde.
+        const slobodni = await this.slobodniZaDan(okvir, interval.localDate);
+        return odgovor(
+          okvir,
+          slobodni && slobodni.length > 0
+            ? `U to vrijeme vas ne mogu sve primiti. ${ponudaAlternativa(slobodni, tenant.timezone, zeljaKupca(okvir))}`
+            : 'U to vrijeme vas ne mogu sve primiti. Recite mi koji drugi dan bi vam odgovarao.',
+          { booking: { available: false } },
+        );
+      }
+      return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+    }
+
+    const clanovi: ClanZaPotvrdu[] = ishod.termini.map((termin, i) => ({
+      ime: termin.ime,
+      kod: termin.kod,
+      pocetak: termin.pocetak,
+      usluge: ucesnici[i]?.naziviUsluga ?? [],
+    }));
+
+    return odgovor(okvir, porukaZaGrupu(clanovi, tenant.timezone), {
+      booking: { appointmentId: ishod.termini[0].appointmentId, created: true, available: true },
+    });
+  }
 
   /**
    * Koji termin kupac misli kad kaže "pomjeri mi termin".

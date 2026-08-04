@@ -1064,3 +1064,106 @@ export async function nadolazeciTermini(
 
   return { ok: true, termini };
 }
+
+// ---------------------------------------------------------------------------
+// Grupna rezervacija
+//
+// Jedna posjeta sa više usluga, ili više ljudi u jednom razgovoru. Vrijeme i
+// raspored odlučuje Core: trajanja su njegova, a i provjera da svi stanu.
+//
+// Djelimična grupa ne postoji kao ishod — Core vrati ili sve ili ništa.
+// ---------------------------------------------------------------------------
+
+export interface UcesnikGrupe {
+  /** Prazno = onaj ko piše. Inače "sestra", "kćerka", ime. */
+  ime: string;
+  serviceIds: string[];
+  staffMemberId?: string;
+}
+
+export interface ZakazanClanGrupe {
+  appointmentId: string;
+  kod: string;
+  ime: string;
+  pocetak: string;
+  kraj: string;
+  serviceIds: string[];
+}
+
+interface ZicaClanGrupe {
+  appointment_id?: unknown;
+  reference?: unknown;
+  guest_name?: unknown;
+  start_at?: unknown;
+  end_at?: unknown;
+  service_ids?: unknown;
+}
+
+export async function napraviGrupu(unos: {
+  businessId: string;
+  startAt: string;
+  klijent: { ime: string; telefon: string };
+  ucesnici: UcesnikGrupe[];
+}): Promise<Ishod<{ groupId: string; termini: ZakazanClanGrupe[] }> | OdbijenTermin> {
+  if (!jeUuid(unos.businessId)) {
+    return neuspjehUlaza('businessId mora biti UUID — zahtjev prema Coreu nije poslan.');
+  }
+  if (unos.ucesnici.length === 0) {
+    return neuspjehUlaza('Grupa bez učesnika — zahtjev prema Coreu nije poslan.');
+  }
+
+  const biznis = unos.businessId.trim();
+  const odgovor = await posalji(
+    '/appointments/group',
+    'POST',
+    {
+      business_id: biznis,
+      start_at: unos.startAt,
+      client: { full_name: unos.klijent.ime, phone: unos.klijent.telefon },
+      participants: unos.ucesnici.map((u) => ({
+        name: u.ime,
+        service_ids: u.serviceIds,
+        ...(u.staffMemberId ? { staff_member_id: u.staffMemberId } : {}),
+      })),
+    },
+    biznis,
+  );
+  if (jeNeuspjeh(odgovor)) return odgovor;
+
+  if (odgovor.status === 409) {
+    const razlog = procitajRazlog(odgovor.tijelo, RAZLOZI_TERMINA);
+    logger.info('Core je odbio grupu.', { business_id: biznis, razlog });
+    return {
+      ok: false,
+      vrsta: 'odbijeno',
+      razlog,
+      poruka: `Core je odbio grupu: ${razlog}.`,
+      status: 409,
+      ponoviti: false,
+      postojeci: null,
+    };
+  }
+
+  const tijelo = objekat(odgovor.tijelo);
+  if (!tijelo || tijelo.ok !== true || !jeTekst(tijelo.group_id)) {
+    return neispravanOblik('/appointments/group', odgovor.status);
+  }
+
+  const termini = nizOd<ZicaClanGrupe, ZakazanClanGrupe>(tijelo.appointments, (red) => {
+    if (!jeUuid(red.appointment_id)) return null;
+    const pocetak = utcIso(red.start_at);
+    const kraj = utcIso(red.end_at);
+    if (!pocetak || !kraj) return null;
+    return {
+      appointmentId: red.appointment_id.trim(),
+      kod: jeTekst(red.reference) ? red.reference.trim() : '',
+      ime: jeTekst(red.guest_name) ? red.guest_name.trim() : '',
+      pocetak,
+      kraj,
+      serviceIds: Array.isArray(red.service_ids) ? red.service_ids.filter(jeTekst) : [],
+    };
+  });
+
+  if (termini.length === 0) return neispravanOblik('/appointments/group', odgovor.status);
+  return { ok: true, groupId: tijelo.group_id.trim(), termini };
+}

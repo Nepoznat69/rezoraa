@@ -29,6 +29,24 @@ export const AiExtractionSchema = z.object({
   end_time: z.string(),
   duration_minutes: z.number().int().nonnegative(),
   party_size: z.number().int().nonnegative(),
+  /**
+   * Ko sve dolazi i sta ko hoce.
+   *
+   * Prazno znaci "samo onaj ko pise, jedna usluga" — sto je i dalje ogromna
+   * vecina poruka, pa se stari put ne mijenja. Popunjava se tek kad kupac
+   * spomene jos nekoga ili vise usluga: "dolazimo ja i sestra, ja sisanje ona
+   * farbanje".
+   *
+   * Prvi ucesnik je UVIJEK onaj ko pise; njegovo `name` ostaje prazno.
+   */
+  participants: z.array(
+    z.object({
+      /** "sestra", "kcerka", ime. Prazno = onaj ko pise. */
+      name: z.string(),
+      /** Nazivi usluga onako kako ih je kupac rekao; backend ih razrjesava. */
+      services: z.array(z.string()),
+    }),
+  ),
   quantity: z.number().int().nonnegative(),
   room_type: z.string(),
   notes: z.string(),

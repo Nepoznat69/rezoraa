@@ -380,3 +380,33 @@ export function porukaZaPotvrduOtkazivanja(
     'Jeste li sigurni? Odgovorite sa "da" ako želite da ga poništim.'
   );
 }
+
+/** Jedan član grupe u potvrdi. */
+export interface ClanZaPotvrdu {
+  ime: string;
+  kod: string;
+  pocetak: string;
+  usluge: string[];
+}
+
+/**
+ * Potvrda grupne rezervacije.
+ *
+ * Šablon, ne AI: svaki član mora dobiti svoj broj termina i svoje vrijeme, a
+ * model bi na dužoj listi neminovno nešto izostavio. Kupac ovo čita kad dođe
+ * kod frizera, pa mora biti tačno.
+ */
+export function porukaZaGrupu(
+  clanovi: ClanZaPotvrdu[],
+  vremenskaZona: string,
+): string {
+  const redovi = clanovi.map((clan) => {
+    const ko = clan.ime.trim() || 'Vi';
+    const usluge = clan.usluge.length ? ` — ${clan.usluge.join(' + ').toLocaleLowerCase('bs')}` : '';
+    const broj = clan.kod ? ` (broj ${clan.kod})` : '';
+    return `• ${ko}: ${sat(clan.pocetak, vremenskaZona)}${usluge}${broj}`;
+  });
+
+  const kada = clanovi.length ? opisTermina(clanovi[0].pocetak, vremenskaZona) : '';
+  return `Zakazano ${kada}:\n${redovi.join('\n')}\n\nVidimo se!`;
+}
