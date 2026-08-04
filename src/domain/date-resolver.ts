@@ -29,6 +29,39 @@ function normalize(value: string): string {
     .trim();
 }
 
+/**
+ * Datum koji je kupac napisao brojevima: "13.08.", "13.8.2026", "13/08".
+ *
+ * Cita se iz same poruke, a ne iz onoga sto AI vrati: na istu recenicu model
+ * nekad popuni `date`, a nekad ne, pa je "u cetvrtak 13.08." jednom davalo
+ * 13.08. a drugi put prvi sljedeci cetvrtak. Za isti tekst kupac mora dobiti
+ * isti dan svaki put.
+ *
+ * Bez godine se uzima ova; ako je taj dan vec prosao, misli se na sljedecu.
+ */
+function datumIzTeksta(
+  text: string,
+  reference: DateTime,
+  timezone: string,
+): string | null {
+  const pogodak = text.match(/\b(\d{1,2})\s*[.\/-]\s*(\d{1,2})\s*[.\/-]?\s*(\d{4})?/);
+  if (!pogodak) return null;
+
+  const dan = Number(pogodak[1]);
+  const mjesec = Number(pogodak[2]);
+  if (dan < 1 || dan > 31 || mjesec < 1 || mjesec > 12) return null;
+
+  const godina = pogodak[3] ? Number(pogodak[3]) : reference.year;
+  let datum = DateTime.fromObject({ year: godina, month: mjesec, day: dan }, { zone: timezone });
+  if (!datum.isValid) return null;
+
+  // "13.08." u decembru znaci sljedecu godinu, ne datum unazad.
+  if (!pogodak[3] && datum.startOf('day') < reference.startOf('day')) {
+    datum = datum.plus({ years: 1 });
+  }
+  return datum.toISODate();
+}
+
 export function resolveBosnianDate(
   expression: string,
   isoCandidate: string,
@@ -39,6 +72,24 @@ export function resolveBosnianDate(
   if (!reference.isValid) return null;
 
   const text = normalize(expression);
+
+  // Kad je kupac NAPISAO datum, taj datum vrijedi — i onda kad je uz njega
+  // rekao i dan u sedmici. "U cetvrtak 13.08." je 13.08., a ne prvi cetvrtak.
+  //
+  // Trazi se cifra u samom izrazu, ne samo AI-jev datum: za "sutra" i "u
+  // srijedu" AI takodjer popuni date, a tamo relativni izraz mora ostati
+  // glavni. Uz to se odbacuje datum u proslosti — model je znao vratiti
+  // godinu unazad, a takav datum nije ono sto je kupac mislio.
+  const napisan = datumIzTeksta(text, reference, timezone);
+  if (napisan) return napisan;
+
+  if (/\d/.test(text) && isoCandidate) {
+    const izricit = DateTime.fromISO(isoCandidate, { zone: timezone });
+    if (izricit.isValid && izricit.startOf('day') >= reference.startOf('day')) {
+      return izricit.toISODate();
+    }
+  }
+
   if (text.includes('prekosutra')) return reference.plus({ days: 2 }).toISODate();
   if (text.includes('sutra')) return reference.plus({ days: 1 }).toISODate();
   if (text.includes('danas')) return reference.toISODate();

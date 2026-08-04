@@ -80,3 +80,71 @@ describe('dani u sedmici u padezima', () => {
     expect(resolveBosnianDate('za petnaest osoba', '', utorak, ZONA)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Izricit datum ima prednost nad imenom dana.
+//
+// Zivi kvar: "u cetvrtak 13.08." je davalo 06.08. — prvi sljedeci cetvrtak —
+// jer je rijec "cetvrtak" pobjedjivala datum koji je kupac napisao. Bez te
+// rijeci je isti datum radio, pa se kvar vidio tek kad ih kupac kaze oba.
+// ---------------------------------------------------------------------------
+
+describe('izricit datum uz ime dana', () => {
+  const utorak = '2026-08-04T09:00:00.000Z';
+  const ZONA = 'Europe/Sarajevo';
+
+  it('datum koji je kupac napisao pobjedjuje ime dana', () => {
+    expect(resolveBosnianDate('u cetvrtak 13.08.', '2026-08-13', utorak, ZONA)).toBe('2026-08-13');
+  });
+
+  it('bez cifara u izrazu i dalje vrijedi relativni izraz', () => {
+    // AI popuni date i za "sutra"; tu relativni izraz mora ostati glavni.
+    expect(resolveBosnianDate('sutra', '2026-08-05', utorak, ZONA)).toBe('2026-08-05');
+    expect(resolveBosnianDate('u srijedu', '2026-08-05', utorak, ZONA)).toBe('2026-08-05');
+  });
+
+  // Model je znao vratiti godinu unazad; takav datum nije ono sto kupac misli.
+  it('datum u proslosti se odbacuje i pada na ime dana', () => {
+    expect(resolveBosnianDate('u srijedu 12:55', '2023-08-02', utorak, ZONA)).toBe('2026-08-05');
+  });
+
+  it('goli datum bez imena dana radi kao i do sada', () => {
+    expect(resolveBosnianDate('13.08.', '2026-08-13', utorak, ZONA)).toBe('2026-08-13');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Datum napisan brojevima cita se iz poruke, ne iz AI-jevog polja.
+//
+// Na istu recenicu model nekad popuni `date`, a nekad ne — pa je ista poruka
+// "u cetvrtak 13.08." jednom davala 13.08., a drugi put prvi sljedeci
+// cetvrtak. Za isti tekst kupac mora dobiti isti dan svaki put.
+// ---------------------------------------------------------------------------
+
+describe('datum napisan brojevima', () => {
+  const utorak = '2026-08-04T09:00:00.000Z';
+  const ZONA = 'Europe/Sarajevo';
+
+  it('cita datum i kad AI nije popunio polje', () => {
+    expect(resolveBosnianDate('u cetvrtak 13.08.', '', utorak, ZONA)).toBe('2026-08-13');
+    expect(resolveBosnianDate('13.8.', '', utorak, ZONA)).toBe('2026-08-13');
+    expect(resolveBosnianDate('13/08', '', utorak, ZONA)).toBe('2026-08-13');
+  });
+
+  it('prihvata i napisanu godinu', () => {
+    expect(resolveBosnianDate('13.08.2027', '', utorak, ZONA)).toBe('2027-08-13');
+  });
+
+  // Datum koji je ove godine vec prosao znaci sljedecu godinu.
+  it('prosli datum bez godine znaci sljedecu godinu', () => {
+    expect(resolveBosnianDate('13.01.', '', utorak, ZONA)).toBe('2027-01-13');
+  });
+
+  it('nemoguc datum se ne prihvata', () => {
+    expect(resolveBosnianDate('45.13.', '', utorak, ZONA)).toBeNull();
+  });
+
+  it('sat u poruci ne postaje datum', () => {
+    expect(resolveBosnianDate('u srijedu', '', utorak, ZONA)).toBe('2026-08-05');
+  });
+});
