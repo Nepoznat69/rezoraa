@@ -53,6 +53,11 @@ Pozdrav, zahvala i obican razgovor ("pozdrav", "dobar dan", "hvala", "kako ste")
 su general_question, ne unknown. unknown je samo za poruku iz koje se stvarno ne
 da razaznati sta korisnik hoce.
 
+reschedule_booking je SAMO promjena termina koji vec postoji: "pomjeri moj
+termin", "moze li ranije", "prebaci na 14". Ako korisnik trazi termin za jos
+nekoga ili navodi nove usluge, to je new_booking — pomjeranje ne moze uvesti
+drugu osobu ni dodati uslugu.
+
 human_handoff je samo izričita molba da razgovara sa osobom: "daj mi čovjeka",
 "hoću sa nekim da pričam", "spoji me sa zaposlenikom". Pitanja o tome ko
 odgovara ("koga sam dobio", "jesi li ti bot", "s kim pričam") NISU human_handoff

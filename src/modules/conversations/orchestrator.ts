@@ -635,6 +635,13 @@ export class ConversationOrchestrator {
         return this.provjeriDostupnost(okvir);
 
       case 'reschedule_booking':
+        // Pomjeranje ne moze uvesti drugu osobu. Kad kupac spomene jos nekoga,
+        // to je nova rezervacija makar model rekao drugacije — inace bi se
+        // "sutra u 16 za mene i sestru" svelo na pomjeranje kupcevog termina,
+        // a sestra bi tiho nestala.
+        if (jeGrupnaPosjeta(extraction)) {
+          return smije.smijeZakazati ? this.zakaziGrupu(okvir) : this.predajCovjeku(okvir);
+        }
         return smije.smijePomjeriti ? this.pomjeri(okvir) : this.predajCovjeku(okvir);
 
       case 'new_booking':
@@ -747,6 +754,25 @@ export class ConversationOrchestrator {
       intent: 'reschedule_booking',
       booking: { appointmentId: radnja.appointmentIds[0] },
     };
+  }
+
+  /**
+   * Briše ono što je razgovor utvrdio.
+   *
+   * Zove se čim rezervacija bude napravljena, pomjerena ili otkazana. Podaci
+   * koji su je sklopili su time potrošeni — kupac koji poslije kaže "ja ne
+   * znam šta" ne smije dobiti uslugu iz PROŠLE rezervacije.
+   */
+  private async zaboraviKontekst(okvir: Okvir): Promise<void> {
+    await zapamtiPoznatePodatke(okvir.businessId, okvir.conversationId, null).catch(
+      (greska: unknown) => {
+        logger.warn('Kontekst razgovora nije obrisan.', {
+          business_id: okvir.businessId,
+          conversation_id: okvir.conversationId,
+          greska: opisGreske(greska),
+        });
+      },
+    );
   }
 
   /** Pamti šta je asistent pitao; neuspjeh se prijavi, ali ne ruši odgovor. */
@@ -1003,6 +1029,7 @@ export class ConversationOrchestrator {
           staffMemberId: termin.staffMemberId,
         },
       );
+      await this.zaboraviKontekst(okvir);
       return odgovor(okvir, saBrojemTermina(tekst, kodTermina), {
         booking: { appointmentId: ishod.appointmentId, created: ishod.created, available: true },
       });
@@ -1120,6 +1147,7 @@ export class ConversationOrchestrator {
       // i za koga je — a model ju je prepisivao u "Vas termin je pomjeren",
       // sto kupcu sa dva termina ne kaze nista. Provjera izmisljenog hvata
       // pogresan sat, ali ne i ime koje je nestalo.
+      await this.zaboraviKontekst(okvir);
       return odgovor(
         okvir,
         porukaZaPomjerenTermin(termin.startAt, tenant.timezone, nadjen.kod, nadjen.ime),
@@ -1183,6 +1211,10 @@ export class ConversationOrchestrator {
       const serviceIds: string[] = [];
       const nazivi: string[] = [];
       for (const trazena of ucesnik.services) {
+        // Kupac koji kaze "ja ne znam sta" dobije praznu uslugu u spisku.
+        // Prazno nije naziv usluge, pa se preskace — inace je asistent javljao
+        // " nazalost ne radimo", sa praznim imenom.
+        if (!trazena.trim()) continue;
         const nadjena = selectService(tenant, trazena);
         if (!nadjena) {
           return odgovor(
@@ -1218,6 +1250,18 @@ export class ConversationOrchestrator {
       return odgovor(okvir, questionForMissingField('customer_name'));
     }
 
+    // Isto pravilo kao kod jednog termina: kupac koji vec ima termin tog dana
+    // ne zakazuje novi. Grupa je isla mimo te provjere, pa je ista osoba
+    // dobijala i termin u 11 i termin u 16 istog dana.
+    if (tenant.postavke.jednaRezervacijaDnevno) {
+      const vecIma = await this.terminTogDana(okvir, interval.localDate);
+      if (vecIma) {
+        return odgovor(okvir, porukaZaVecZauzetDan(vecIma.pocetak, tenant.timezone), {
+          booking: { appointmentId: vecIma.appointmentId, created: false },
+        });
+      }
+    }
+
     const ishod = await napraviGrupu({
       businessId: okvir.businessId,
       startAt: interval.startsAt.toISOString(),
@@ -1248,6 +1292,7 @@ export class ConversationOrchestrator {
       usluge: ucesnici[i]?.naziviUsluga ?? [],
     }));
 
+    await this.zaboraviKontekst(okvir);
     return odgovor(okvir, porukaZaGrupu(clanovi, tenant.timezone), {
       booking: { appointmentId: ishod.termini[0].appointmentId, created: true, available: true },
     });
