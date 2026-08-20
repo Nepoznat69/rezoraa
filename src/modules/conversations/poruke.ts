@@ -39,6 +39,18 @@ export const PORUKA_TEHNICKI_PROBLEM =
 export const PORUKA_PREUZEO_COVJEK =
   'Vašu poruku sam proslijedio zaposleniku. Javit će vam se čim bude dostupan.';
 
+/**
+ * Jedina poruka koju prigušen kontakt dobije — i to najviše jednom u deset
+ * minuta.
+ *
+ * Ne kaže se ni koja je granica ni koliko je ostalo: broj bi bio uputstvo kako
+ * da se granica taman izbjegne. Ne nudi se ni alternativa, jer je jedina
+ * ispravna radnja sačekati.
+ */
+export const PORUKA_PREBRZO =
+  'Stiglo je puno poruka odjednom, pa ne stižem odgovoriti na svaku. ' +
+  'Napišite mi u jednoj poruci šta Vam treba i javljam se čim mognem.';
+
 /** Poruka koju gateway ne razumije. */
 export const PORUKA_NERAZUMIJEVANJE =
   'Nisam potpuno razumio poruku. Možete li je kratko preformulisati ili zatražiti zaposlenika?';
@@ -285,6 +297,14 @@ export function porukaZaOdbijenTermin(
       return `Radnik tada nije dostupan. ${ponuda}`;
     case 'invalidTime':
       return 'To vrijeme nisam mogao ispravno pročitati. Molim vas napišite dan i sat, na primjer "sutra u 14:30".';
+    // Bez ponude alternativa: nijedan drugi sat nece proci, pa bi spisak
+    // termina ovdje bio poziv da kupac pokusa ponovo i ponovo dobije isto.
+    case 'tooManyBookings':
+      return (
+        'Već imate zakazano onoliko termina koliko mogu potvrditi putem poruka. ' +
+        'Ako želite još jedan, javite se salonu — ili mi recite da neki od ' +
+        'postojećih pomjerim ili otkažem.'
+      );
     default:
       return `Taj termin nažalost ne mogu potvrditi. ${ponuda}`;
   }

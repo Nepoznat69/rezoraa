@@ -94,6 +94,10 @@ export const RAZLOZI_TERMINA = [
   // Kupac vec ima termin tog dana. Nije greska nego drugaciji tok razgovora:
   // ono sto trazi je pomjeranje postojeceg, a ne novi termin.
   'alreadyBookedThatDay',
+  // Kupac je iscrpio ono sto smije zakazati sam (Core, migracija 0020). Nije
+  // greska nego granica: ponavljanje istog zahtjeva nikad nece proci, pa se
+  // kupcu kaze sta moze uraditi umjesto toga.
+  'tooManyBookings',
 ] as const;
 export type RazlogTermina = (typeof RAZLOZI_TERMINA)[number];
 

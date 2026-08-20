@@ -35,6 +35,7 @@ import {
 } from '../../domain/schemas.js';
 import { config } from '../../config.js';
 import { withConversationLock } from '../../infrastructure/database.js';
+import { zabiljeziPoruku } from '../zastita/brzina.js';
 import { logger } from '../../lib/logger.js';
 import { AiExtractor } from '../ai/extractor.js';
 import {
@@ -48,7 +49,9 @@ import {
 } from '../core-api/core-klijent.js';
 import {
   cekanaRadnja,
+  dodajStrike,
   poznatiPodaci,
+  stanjeZastite,
   zapamtiPoznatePodatke,
   type PoznatiPodaci,
   zapamtiCekanuRadnju,
@@ -67,6 +70,7 @@ import { izgovori } from './izgovor.js';
 import {
   PORUKA_CORE_NEDOSTUPAN,
   PORUKA_NERAZUMIJEVANJE,
+  PORUKA_PREBRZO,
   PORUKA_PREUZEO_COVJEK,
   PORUKA_TEHNICKI_PROBLEM,
   opisTermina,
@@ -252,6 +256,33 @@ function jePotvrda(tekst: string): boolean {
     .trim();
   return /^(da|da da|dada|tako je|potvrdujem|potvrda|moze|ok|okej|u redu|jeste|naravno|slazem se|jesam siguran|siguran sam)$/.test(
     t,
+  );
+}
+
+/**
+ * Potvrda koja nema šta da potvrdi.
+ *
+ * Poslije uspjesne rezervacije kontekst razgovora se brise, pa "da" ili "ok"
+ * stize bez ijednog podatka o terminu. Kroz `zakazi` je to zavrsavalo kao
+ * pocetak NOVE rezervacije i kupac koji je upravo dobio potvrdu je odmah cuo
+ * "Na koje ime zelite rezervaciju?".
+ *
+ * Provjerava se izvlacenje POSLIJE dopune iz konteksta: rezervacija koja je u
+ * toku ima zapamcen dan i sat, pa njeno "da" ovdje ne pada — hvata se samo
+ * gola potvrda bez ijednog traga rezervacije.
+ */
+function jeGolaPotvrda(extraction: AiExtraction, tekst: string): boolean {
+  if (extraction.intent !== 'confirm_booking') return false;
+  if (!jePotvrda(tekst)) return false;
+  return (
+    !extraction.date.trim() &&
+    !extraction.date_expression.trim() &&
+    !extraction.start_time.trim() &&
+    !extraction.start_time_expression.trim() &&
+    !extraction.service.trim() &&
+    !extraction.room_type.trim() &&
+    !extraction.booking_id.trim() &&
+    extraction.participants.length === 0
   );
 }
 
@@ -545,6 +576,47 @@ export class ConversationOrchestrator {
         greska: opisGreske(greska),
       });
       return { ...tiho(), reply: PORUKA_TEHNICKI_PROBLEM };
+    }
+
+    // Kontakt kojem je asistent ranije zašutio. Poruka je već zapisana, pa je
+    // vlasnik vidi u Inboxu — ne odgovara se, i ne šalje se poruka o grešci:
+    // i ona je plaćena, a još potvrđuje pošiljaocu da je prošao.
+    const zastita = await stanjeZastite(businessId, conversationId).catch(() => null);
+    if (zastita?.blokiranDo) {
+      logger.info('Poruka je zapisana, ali asistent za ovaj kontakt šuti.', {
+        business_id: businessId,
+        conversation_id: conversationId,
+        do_kada: zastita.blokiranDo,
+      });
+      return tiho();
+    }
+
+    // Koliko brzo ovaj broj piše. Stoji POSLIJE deduplikacije (Metina vlastita
+    // ponavljanja ne smiju trošiti kupčev budžet) i PRIJE poziva AI sloju —
+    // jer je AI ono što se plaća.
+    const brzina = await zabiljeziPoruku(message.channel_id, message.customer_phone);
+    if (brzina.vrsta === 'previse') {
+      // Preko satne granice: ovo više nije žurba nego obrazac, pa se pamti.
+      await dodajStrike(businessId, conversationId, 'previše poruka u kratkom roku').catch(
+        (greska: unknown) => {
+          logger.warn('Strike nije zapisan.', {
+            business_id: businessId,
+            conversation_id: conversationId,
+            greska: opisGreske(greska),
+          });
+        },
+      );
+      return tiho();
+    }
+    if (brzina.vrsta === 'prigusen') {
+      // Kaže se JEDNOM, pa tišina. Odgovor na svaku prigušenu poruku košta nas
+      // isto koliko i da prigušenja nema.
+      if (!brzina.upozori) return tiho();
+      const upozorenje = PORUKA_PREBRZO;
+      await zapisiOdlaznuPoruku({ businessId, conversationId, tekst: upozorenje }).catch(
+        () => undefined,
+      );
+      return { ...tiho(), reply: upozorenje };
     }
 
     // Ako je asistent nešto pitao, ova poruka je prvo odgovor na TO pitanje.
@@ -945,6 +1017,21 @@ export class ConversationOrchestrator {
   // -------------------------------------------------------------------------
 
   private async zakazi(okvir: Okvir): Promise<OrchestrationResult> {
+    // "Da" bez ijednog podatka o terminu nije nova rezervacija nego odziv na
+    // ono što je asistent maloprije rekao.
+    if (jeGolaPotvrda(okvir.extraction, okvir.message.text)) {
+      return this.potvrdiVecZakazano(okvir);
+    }
+    return this.zakaziBezPotvrde(okvir);
+  }
+
+  /**
+   * Samo zakazivanje, bez prepoznavanja gole potvrde.
+   *
+   * Odvojeno od `zakazi` da povratak iz `potvrdiVecZakazano` — kad Core ne
+   * odgovori — ne bi ponovo upao u istu granu i vrtio se u krug.
+   */
+  private async zakaziBezPotvrde(okvir: Okvir): Promise<OrchestrationResult> {
     const { tenant, extraction, message } = okvir;
     if (tenant.services.length === 0) return this.bezUsluga(okvir);
 
@@ -1415,6 +1502,54 @@ export class ConversationOrchestrator {
         `Imate više termina:\n${spisak}\n\n` +
         'Napišite broj termina na koji mislite, ili "sve" ako mislite na sve.',
     };
+  }
+
+  /**
+   * Odgovor na golu potvrdu — "da" poslije potvrđene rezervacije.
+   *
+   * Kupcu se ponovi šta ima, umjesto da se pokrene nova rezervacija. Kad
+   * termina nema, ne traži se ime nego se pita šta kupac želi: gola potvrda
+   * ne kaže ni uslugu ni dan, pa je svako drugo pitanje nagađanje.
+   *
+   * Ako Core ne odgovori, zakazivanje ide starim putem. Provjera je pomoć, a
+   * ne uslov — bolje propustiti nju nego prekinuti razgovor zbog nje.
+   */
+  private async potvrdiVecZakazano(okvir: Okvir): Promise<OrchestrationResult> {
+    const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
+    if (!ishod.ok) {
+      logger.warn('Termini kupca nisu dohvaćeni; potvrda se obrađuje kao zakazivanje.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        vrsta: ishod.vrsta,
+      });
+      return this.zakaziBezPotvrde(okvir);
+    }
+
+    const termini = ishod.termini;
+    if (termini.length === 0) {
+      return odgovor(okvir, 'Recite mi šta Vam treba i kada, pa da nađemo termin.');
+    }
+
+    // Više termina znači grupa ili više posjeta — kupcu se nabroje svi, jer
+    // "Vaš termin je potvrđen" tada ne kaže koji.
+    if (termini.length > 1) {
+      const spisak = termini
+        .slice(0, 5)
+        .map((termin) => {
+          const ko = termin.ime.trim() ? `${termin.ime.trim()}: ` : '';
+          const broj = termin.kod ? ` — broj ${termin.kod}` : '';
+          return `• ${ko}${opisTermina(termin.pocetak, okvir.tenant.timezone)}${broj}`;
+        })
+        .join('\n');
+      return odgovor(okvir, `Sve je potvrđeno:\n${spisak}\n\nVidimo se!`);
+    }
+
+    const termin = termini[0];
+    return odgovor(
+      okvir,
+      porukaZaPotvrdjenTermin(termin.pocetak, okvir.tenant.timezone, termin.usluga),
+      { booking: { appointmentId: termin.appointmentId, created: false } },
+    );
   }
 
   /**

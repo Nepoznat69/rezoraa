@@ -703,3 +703,126 @@ export async function poznatiPodaci(
     upisanoU: podaci.upisanoU,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 10. Šta asistent pamti o kontaktu koji pretjeruje
+//
+// Brojanje brzine je u gateway bazi i preživi pad Corea. Ovo je druga stvar:
+// odluka o kupcu, koju vlasnik mora VIDJETI u Inboxu i moći poništiti. Blokada
+// koju salon ne vidi ne razlikuje se od kupca koji je prestao pisati.
+//
+// Ugovor tabele: database/migrations/0021_conversation_abuse_state.sql (Core).
+// ---------------------------------------------------------------------------
+
+/** Koliko strikeova prije nego asistent zašuti. */
+export const STRIKEOVA_DO_BLOKADE = 3;
+
+/**
+ * Koliko dugo traje blokada, po redu.
+ *
+ * Prva je kratka jer je najvjerovatnije greška — nervozan kupac kojem je hitno
+ * nije napadač. Ko se vrati poslije nje, vraća se namjerno, pa druga traje
+ * duže. Duže od dana se ne ide bez čovjeka: to više nije prigušenje nego odluka
+ * da se neko ne uslužuje, a nju donosi vlasnik, ne brojač.
+ */
+export const TRAJANJE_BLOKADE_MINUTA = [30, 180, 1440] as const;
+
+export interface StanjeZastite {
+  strikes: number;
+  /** UTC ISO do kada asistent šuti, ili null. */
+  blokiranDo: string | null;
+  razlog: string | null;
+}
+
+/** Je li razgovor trenutno ušutkan i zašto. */
+export async function stanjeZastite(
+  businessId: string,
+  conversationId: string,
+): Promise<StanjeZastite | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+
+  const redovi = await upit<{
+    strikes: number | null;
+    blocked_until: string | null;
+    blocked_reason: string | null;
+  }>(
+    `SELECT strikes, blocked_until, blocked_reason
+       FROM public.conversations
+      WHERE business_id = $1 AND id = $2
+      LIMIT 1`,
+    [biznis, razgovor],
+  );
+
+  const red = redovi[0];
+  if (!red) return null;
+
+  // Istekla blokada se ovdje tretira kao da je nema. Redovi se ne čiste da bi
+  // vlasnik u Inboxu i dalje vidio da je nekad postojala.
+  const doKada = red.blocked_until ? new Date(red.blocked_until) : null;
+  const vazi = doKada !== null && Number.isFinite(doKada.getTime()) && doKada.getTime() > Date.now();
+
+  return {
+    strikes: typeof red.strikes === 'number' ? red.strikes : 0,
+    blokiranDo: vazi && red.blocked_until ? new Date(red.blocked_until).toISOString() : null,
+    razlog: vazi ? red.blocked_reason : null,
+  };
+}
+
+/**
+ * Bilježi prekršaj i, ako ih se nakupilo dovoljno, ušutkava asistenta.
+ *
+ * Blokada se postavlja istim upitom koji povećava brojač, pa dvije poruke u
+ * istom trenutku ne mogu obje pročitati „dva strikea" i obje dodati treći.
+ *
+ * Vraća do kada je ušutkan, ili null ako još nije.
+ */
+export async function dodajStrike(
+  businessId: string,
+  conversationId: string,
+  razlog: string,
+): Promise<string | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const razgovor = obavezanUuid(conversationId, 'conversationId');
+  const opis = razlog.trim().slice(0, 200);
+
+  // Trajanje raste sa svakim ponavljanjem. Cijela odluka je u jednom UPDATE-u
+  // jer se `strikes` u istom izrazu i cita i pise — dvije poruke u istom
+  // trenutku ne mogu obje vidjeti „dva strikea" i obje dodati treci.
+  const redovi = await upit<{ blocked_until: string | null }>(
+    `UPDATE public.conversations
+        SET strikes = strikes + 1,
+            blocked_until = CASE
+              WHEN strikes + 1 >= $3
+              THEN now() + ((CASE
+                     WHEN strikes + 1 >= $3 + 2 THEN $6
+                     WHEN strikes + 1 >= $3 + 1 THEN $5
+                     ELSE $4
+                   END)::text || ' minutes')::interval
+              ELSE blocked_until
+            END,
+            blocked_reason = CASE WHEN strikes + 1 >= $3 THEN $7 ELSE blocked_reason END,
+            updated_at = now()
+      WHERE business_id = $1 AND id = $2
+     RETURNING blocked_until`,
+    [
+      biznis,
+      razgovor,
+      STRIKEOVA_DO_BLOKADE,
+      TRAJANJE_BLOKADE_MINUTA[0],
+      TRAJANJE_BLOKADE_MINUTA[1],
+      TRAJANJE_BLOKADE_MINUTA[2],
+      opis,
+    ],
+  );
+
+  const doKada = redovi[0]?.blocked_until ?? null;
+  if (doKada) {
+    logger.info('Asistent je ušutkan za ovaj kontakt.', {
+      business_id: biznis,
+      conversation_id: razgovor,
+      razlog: opis,
+    });
+  }
+  return doKada ? new Date(doKada).toISOString() : null;
+}
