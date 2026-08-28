@@ -13,6 +13,7 @@ import {
 } from './modules/channels/meta/meta-onboarding.js';
 import { tajnePoKanalu, tajnePoWebhookKljucu } from './modules/channels/meta/meta-kanal-tajne.js';
 import { MetaWebhookService } from './modules/channels/meta/meta-webhook.js';
+import { proslijediKopiju } from './modules/channels/meta/prosljedjivanje.js';
 import { ConversationOrchestrator } from './modules/conversations/orchestrator.js';
 import { zatvoriCoreVezu } from './modules/core-baza/core-repozitorij.js';
 import { InboundWorker } from './modules/inbound/inbound-worker.js';
@@ -277,6 +278,8 @@ app.post(
     ) {
       return reply.code(401).send({ message: 'Meta webhook potpis nije ispravan.' });
     }
+    // Kopija drugom sistemu, tek nakon potvrđenog potpisa. Ne čeka se.
+    proslijediKopiju(rawBuffer, signature);
     const accepted = await webhook.accept(request.body);
     logger.info('Meta webhook je prihvaćen.', accepted);
     return reply.code(200).send({ primljeno: true, ...accepted });
@@ -326,6 +329,9 @@ app.post(
       logger.warn('Odbijen webhook sa neispravnim potpisom.', { channel_id: tajne.id });
       return reply.code(401).send({ message: 'Meta webhook potpis nije ispravan.' });
     }
+
+    // Kopija drugom sistemu, tek nakon potvrđenog potpisa. Ne čeka se.
+    proslijediKopiju(rawBuffer, signature);
 
     const accepted = await webhook.accept(request.body);
     logger.info('Meta webhook klijenta je prihvaćen.', { channel_id: tajne.id, ...accepted });

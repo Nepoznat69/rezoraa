@@ -44,6 +44,11 @@ const ConfigSchema = z.object({
   META_APP_SECRET: optionalText,
   META_ACCESS_TOKEN: optionalText,
   META_GRAPH_VERSION: optionalText,
+  // Kopija svakog POTVRĐENOG Metinog webhooka ide i na ovu adresu. Postoji
+  // zato što Metina aplikacija ima tačno jednu callback adresu, pa se drugi
+  // sistem na istoj WhatsApp liniji ne može pretplatiti sam.
+  // Prazno = ne prosljeđuje se nikome. Vidi channels/meta/prosljedjivanje.ts.
+  META_WEBHOOK_FORWARD_URL: optionalText,
   N8N_META_INBOUND_URL: optionalText,
   // Master ključ kojim se šifriraju tajne klijenata u bazi.
   SECRETS_KEY: optionalText,
