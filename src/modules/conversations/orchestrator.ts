@@ -50,6 +50,7 @@ import {
 import {
   cekanaRadnja,
   dodajStrike,
+  imeKupcaPoBroju,
   poznatiPodaci,
   stanjeZastite,
   zapamtiPoznatePodatke,
@@ -80,6 +81,7 @@ import {
   porukaZaGrupu,
   type ClanZaPotvrdu,
   porukaZaOdbijenTermin,
+  RAZLOZI_BEZ_ALTERNATIVA,
   porukaZaOdbijenoOtkazivanje,
   porukaZaPomjerenTermin,
   porukaZaNepoznatuUslugu,
@@ -696,6 +698,20 @@ export class ConversationOrchestrator {
 
     dopuniPoznatim(extraction, vecPoznato);
 
+    // Kupca kojeg salon već ima u kartonu ne treba pitati kako se zove.
+    //
+    // Stoji ovdje, a ne uz svako pitanje za ime, jer tokova ima više (jedan
+    // termin, grupa, pomjeranje) i svaki bi ga morao pamtiti zasebno. Ovdje se
+    // popuni jednom i dalje se ponaša kao da ga je kupac upravo rekao.
+    //
+    // Neuspjeh ne prekida ništa: bez imena se pita, kao i do sada.
+    if (!extraction.customer_name.trim()) {
+      const izKartona = await imeKupcaPoBroju(businessId, message.customer_phone).catch(
+        () => null,
+      );
+      if (izKartona) extraction.customer_name = izKartona;
+    }
+
     // Zapamćeno vrijedi za sljedeću poruku. Neuspjeh se prijavi, ali razgovor
     // se zbog njega ne prekida — asistent tad radi kao i prije.
     await zapamtiPoznatePodatke(businessId, conversationId, zaPamcenje(extraction)).catch(
@@ -1177,9 +1193,9 @@ export class ConversationOrchestrator {
           vrsta: 'odbijeno',
           datum: interval.localDate,
           usluga: uslugaZaCinjenice(usluga),
-          // Kod nečitljivog vremena šablon namjerno ne nudi termine; činjenice
-          // ih zato ni ne dobijaju, da ih AI ne bi ponudio umjesto pitanja.
-          slobodni: ishod.razlog === 'invalidTime' ? [] : ostalo,
+          // Gdje šablon namjerno ne nudi termine, ni činjenice ih ne dobijaju —
+          // inače AI ponudi ono što je šablon prešutio. Vidi RAZLOZI_BEZ_ALTERNATIVA.
+          slobodni: RAZLOZI_BEZ_ALTERNATIVA.has(ishod.razlog) ? [] : ostalo,
           zelja,
           trazeniSat: extraction.start_time,
           razlog: ljudskiRazlog(ishod.razlog),
@@ -1285,7 +1301,7 @@ export class ConversationOrchestrator {
           vrsta: 'odbijeno',
           datum: interval.localDate,
           usluga: uslugaZaCinjenice(usluga),
-          slobodni: ishod.razlog === 'invalidTime' ? [] : ostalo,
+          slobodni: RAZLOZI_BEZ_ALTERNATIVA.has(ishod.razlog) ? [] : ostalo,
           zelja,
           trazeniSat: extraction.start_time,
           razlog: ljudskiRazlog(ishod.razlog),

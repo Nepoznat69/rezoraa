@@ -826,3 +826,59 @@ export async function dodajStrike(
   }
   return doKada ? new Date(doKada).toISOString() : null;
 }
+
+// ---------------------------------------------------------------------------
+// 11. Ime kupca iz njegovog kartona
+//
+// ZAŠTO POSTOJI
+//   Salon koji traži ime pitao ga je i one koje već poznaje. Ime se pamtilo u
+//   `known_slots`, ali se to pamćenje briše poslije svake uspješne rezervacije
+//   — s pravom, jer stari datum i sat ne smiju curiti u sljedeću. S njima je
+//   odlazilo i ime, pa je isti kupac u istom razgovoru dvaput pitan kako se
+//   zove.
+//
+//   Ime nije podatak koji zastarijeva. Karton kupca ga već ima, vezan za broj
+//   telefona kroz `phone_key` iz migracije 0019 — ovo je prvo mjesto gdje se
+//   taj identitet zaista koristi u razgovoru, a ne samo u brojanju granica.
+//
+// ZAŠTO `telefon_kljuc()` A NE POREĐENJE BROJEVA
+//   Ista funkcija koju koristi i generisana kolona, pa "061 123 456" sa
+//   dashboarda i "38761123456" sa WhatsAppa pogađaju isti red. Poređenje
+//   napisanih brojeva bi ovdje promašilo upravo one kupce zbog kojih 0019 i
+//   postoji.
+//
+// ŠTA SE NAMJERNO NE VRAĆA
+//   Ime koje je zapravo prepisan broj telefona. Takve kartone pravi sam
+//   gateway kad kupac nije rekao kako se zove; vratiti to kao ime značilo bi
+//   pozdraviti čovjeka njegovim brojem.
+//
+//   Vraća se null i kad se nađe više od jednog reda. Jedinstveni indeks iz
+//   0019 to sprječava, ali ako baza ikako uzvrati dva, ime se ne pogađa.
+// ---------------------------------------------------------------------------
+
+export async function imeKupcaPoBroju(
+  businessId: string,
+  telefon: string,
+): Promise<string | null> {
+  const biznis = obavezanBusinessId(businessId);
+  const broj = normalizePhone(typeof telefon === 'string' ? telefon : '');
+  if (!broj) return null;
+
+  const redovi = await upit<{ full_name: string | null }>(
+    `SELECT full_name
+       FROM public.clients
+      WHERE business_id = $1
+        AND phone_key = public.telefon_kljuc($2)
+      LIMIT 2`,
+    [biznis, broj],
+  );
+
+  if (redovi.length !== 1) return null;
+
+  const ime = (redovi[0].full_name ?? '').trim();
+  if (!ime) return null;
+  // Karton bez pravog imena: gateway ga upisuje kao broj kad se kupac nije
+  // predstavio. To nije ime i ne smije se koristiti kao ime.
+  if (normalizePhone(ime) === broj) return null;
+  return ime;
+}

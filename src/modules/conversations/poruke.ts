@@ -275,6 +275,24 @@ export function ponudaAlternativa(
 }
 
 /**
+ * Razlozi kod kojih ponuda drugih termina nema smisla.
+ *
+ * Kod ovih odbijenica problem nije u satu nego u nečemu što nijedan drugi sat
+ * ne mijenja: granica koju je kupac iscrpio, ili vrijeme koje se nije dalo
+ * pročitati. Spisak slobodnih termina tu je poziv da kupac pokuša ponovo i
+ * ponovo dobije isto.
+ *
+ * Postoji kao izvezena konstanta, a ne kao uslov na dva mjesta, jer se to već
+ * jednom raspalo: šablon je prestao nuditi termine, ali su činjenice AI sloju
+ * i dalje išle sa spiskom — pa je kupac dobio ponudu koju šablon nije htio
+ * dati, i uz nju izmišljeno objašnjenje o radnom vremenu.
+ */
+export const RAZLOZI_BEZ_ALTERNATIVA: ReadonlySet<string> = new Set([
+  'invalidTime',
+  'tooManyBookings',
+]);
+
+/**
  * Odbijenica Corea (HTTP 409 na kreiranju ili pomjeranju termina) u rečenicu.
  *
  * `alternative` su termini koji su ostali slobodni iz iste, već dohvaćene

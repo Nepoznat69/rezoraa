@@ -205,6 +205,11 @@ export function ljudskiRazlog(razlog: RazlogTermina | NepoznatRazlog): string {
       return 'radnik tada nije dostupan';
     case 'invalidTime':
       return 'vrijeme nije bilo dovoljno jasno napisano';
+    // Razlog mora reći da je stvar u GRANICI, ne u satu. Bez toga izgovor
+    // odbijenicu čita kao vremensku i doda objašnjenje o radnom vremenu, koje
+    // ovdje nema veze ni sa čim i kupcu zvuči kao izmišljotina.
+    case 'tooManyBookings':
+      return 'kupac je već iskoristio koliko termina smije zakazati porukama';
     default:
       return 'taj termin nije moguće potvrditi';
   }

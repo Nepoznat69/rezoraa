@@ -11,6 +11,7 @@ import {
   azurirajStatusPoruke,
   businessIdZaBroj,
   historijaRazgovora,
+  imeKupcaPoBroju,
   nadjiIliNapraviRazgovor,
   postaviCoreIzvrsilac,
   preuzeoCovjek,
@@ -478,5 +479,51 @@ describe('disciplina business_id-a kroz cijeli modul', () => {
       expect(tekst).not.toContain(BIZNIS);
       expect(tekst).not.toContain('${');
     }
+  });
+});
+
+describe('imeKupcaPoBroju — identitet iz 0019 u razgovoru', () => {
+  it('traži po phone_key kroz telefon_kljuc i uvijek uz business_id', async () => {
+    odgovori = [[{ full_name: 'Emir' }]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBe('Emir');
+
+    const upit = upitiSaFilterom()[0];
+    expect(upit.tekst).toContain('business_id = $1');
+    expect(upit.tekst).toContain('public.telefon_kljuc($2)');
+    // Broj ide normalizovan, isto kao svuda drugdje.
+    expect(upit.vrijednosti).toEqual([BIZNIS, KONTAKT_CIFRE]);
+  });
+
+  it('ne vraća ime kada kartona nema', async () => {
+    odgovori = [[]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBeNull();
+  });
+
+  it('ne pogađa kada baza uzvrati više kartona', async () => {
+    odgovori = [[{ full_name: 'Emir' }, { full_name: 'Neko drugi' }]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBeNull();
+  });
+
+  it('ne vraća broj telefona kao ime', async () => {
+    // Takav karton pravi sam gateway kad se kupac nije predstavio.
+    odgovori = [[{ full_name: KONTAKT_CIFRE }]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBeNull();
+    odgovori = [[{ full_name: KONTAKT }]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBeNull();
+  });
+
+  it('ne vraća prazno ime', async () => {
+    odgovori = [[{ full_name: '   ' }]];
+    await expect(imeKupcaPoBroju(BIZNIS, KONTAKT)).resolves.toBeNull();
+  });
+
+  it('bez broja ne dira bazu', async () => {
+    await expect(imeKupcaPoBroju(BIZNIS, '')).resolves.toBeNull();
+    expect(upiti).toHaveLength(0);
+  });
+
+  it('odbija poziv bez ispravnog business_id', async () => {
+    await expect(imeKupcaPoBroju('', KONTAKT)).rejects.toThrow();
+    expect(upiti).toHaveLength(0);
   });
 });
