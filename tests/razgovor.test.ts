@@ -473,3 +473,88 @@ describe('zaštita od pretjerivanja', () => {
     expect(uredan.zadnjiOdgovor()).not.toBe('');
   });
 });
+
+/**
+ * Otkazivanje po DANU, a ne samo po broju termina.
+ *
+ * Uživo: kupac sa tri termina napiše "otkazi subotu", a asistent mu dvaput
+ * vrati spisak sva tri i traži broj. Broj termina niko ne pamti — dan pamte
+ * svi. Pitanje ostaje samo tamo gdje je zaista potrebno: kad na rečeni dan ima
+ * više termina, jer ih opis tada ne razlikuje.
+ */
+describe('kupac pokazuje na termin danom', () => {
+  const PREKOSUTRA = '2026-08-12';
+
+  it('otkazuje bez pitanja kad je tog dana samo jedan termin', async () => {
+    const razgovor = salon.razgovor(TELEFON);
+    salon.dodajTermin({ datum: SUTRA, vrijeme: '13:00', usluga: 'šišanje', telefon: TELEFON });
+    salon.dodajTermin({ datum: PREKOSUTRA, vrijeme: '10:00', usluga: 'šišanje', telefon: TELEFON });
+
+    await razgovor.posalji('otkazi sutra', {
+      intent: 'cancel_booking',
+      date_expression: 'sutra',
+    });
+
+    expect(razgovor.zadnjiOdgovor()).not.toContain('Napišite broj termina');
+    const cekana = razgovor.cekanaRadnja() as { appointmentIds?: string[] } | null;
+    expect(cekana?.appointmentIds).toHaveLength(1);
+
+    await razgovor.posalji('da', { intent: 'confirm_booking' });
+
+    const aktivni = salon.aktivniTermini();
+    expect(aktivni).toHaveLength(1);
+    expect(aktivni[0].startAt.startsWith(PREKOSUTRA)).toBe(true);
+  });
+
+  it('pita za broj kad na taj dan ima više termina, i nabraja samo taj dan', async () => {
+    const razgovor = salon.razgovor(TELEFON);
+    salon.dodajTermin({ datum: SUTRA, vrijeme: '10:00', usluga: 'šišanje', telefon: TELEFON });
+    salon.dodajTermin({ datum: SUTRA, vrijeme: '15:00', usluga: 'šišanje', telefon: TELEFON });
+    salon.dodajTermin({ datum: PREKOSUTRA, vrijeme: '11:00', usluga: 'šišanje', telefon: TELEFON });
+
+    await razgovor.posalji('otkazi sutra', {
+      intent: 'cancel_booking',
+      date_expression: 'sutra',
+    });
+
+    const odgovor = razgovor.zadnjiOdgovor();
+    expect(odgovor).toContain('Tog dana imate više termina');
+    expect(odgovor).toContain('10:00');
+    expect(odgovor).toContain('15:00');
+    // Termin drugog dana se ne spominje: kupac je već rekao koji dan misli.
+    expect(odgovor).not.toContain('11:00');
+    expect(salon.aktivniTermini()).toHaveLength(3);
+  });
+
+  it('kaže kad tog dana nema ničega, umjesto da ponudi spisak kao da nije čuo', async () => {
+    const razgovor = salon.razgovor(TELEFON);
+    salon.dodajTermin({ datum: SUTRA, vrijeme: '10:00', usluga: 'šišanje', telefon: TELEFON });
+    salon.dodajTermin({ datum: PREKOSUTRA, vrijeme: '11:00', usluga: 'šišanje', telefon: TELEFON });
+
+    await razgovor.posalji('otkazi danas', {
+      intent: 'cancel_booking',
+      date_expression: 'danas',
+    });
+
+    expect(razgovor.zadnjiOdgovor()).toContain('ne vidim vaš termin');
+    expect(salon.aktivniTermini()).toHaveLength(2);
+  });
+
+  it('broj termina i dalje radi kad ga kupac napiše', async () => {
+    const razgovor = salon.razgovor(TELEFON);
+    const prvi = salon.dodajTermin({
+      datum: SUTRA,
+      vrijeme: '10:00',
+      usluga: 'šišanje',
+      telefon: TELEFON,
+    });
+    salon.dodajTermin({ datum: SUTRA, vrijeme: '15:00', usluga: 'šišanje', telefon: TELEFON });
+
+    await razgovor.posalji(`otkazi broj ${prvi.reference}`, { intent: 'cancel_booking' });
+    await razgovor.posalji('da', { intent: 'confirm_booking' });
+
+    const aktivni = salon.aktivniTermini();
+    expect(aktivni).toHaveLength(1);
+    expect(aktivni[0].reference).not.toBe(prvi.reference);
+  });
+});

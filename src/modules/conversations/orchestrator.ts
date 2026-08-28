@@ -323,6 +323,57 @@ function traziSve(tekst: string): boolean {
   return /\b(sve|sva|svih|oba|obje|obadva|sve termine|oba termina)\b/.test(t);
 }
 
+/**
+ * Dan na koji kupac misli kad radnju veže za datum, a ne za broj termina.
+ *
+ * "Otkazi subotu" i "pomjeri onaj u petak" su najprirodniji način da čovjek
+ * pokaže na svoj termin — broj termina niko ne pamti. Ovdje se taj dan pretvara
+ * u datum istim pravilima kojima ga pretvara i zakazivanje, pa "subota" znači
+ * isto u oba toka.
+ *
+ * Vraća null kad dana nema: tada se pita, kao i do sada.
+ */
+function danIzPoruke(okvir: Okvir, zona: string): string | null {
+  const { extraction, message } = okvir;
+  const izraz = extraction.date_expression.trim() || extraction.date.trim();
+  if (!izraz && !extraction.date.trim()) return null;
+  return resolveBosnianDate(izraz, extraction.date.trim(), message.received_at, zona);
+}
+
+/** "u subotu, 29.08." — dan bez sata, jer sat ovdje nije ni rečen. */
+function opisDana(isoDatum: string, zona: string): string {
+  const d = DateTime.fromISO(isoDatum, { zone: zona });
+  return d.isValid ? `dan ${d.toFormat('dd.MM.')}` : 'taj dan';
+}
+
+/**
+ * Pitanje koje termine kupac misli, sa brojem uz svaki.
+ *
+ * Broj MORA biti u spisku: bez njega kupac nema čime odgovoriti osim opisom, a
+ * opis dva termina istog dana ne razlikuje pouzdano — što je i jedini slučaj u
+ * kojem se ovo pitanje uopšte postavlja kad je dan poznat.
+ *
+ * `samoTajDan` mijenja uvod: kad je kupac već rekao dan, spisak svih njegovih
+ * termina bio bi buka i djelovalo bi kao da ga nismo čuli.
+ */
+function pitanjeZaViseTermina(
+  termini: Array<{ ime: string; usluga: string; kod: string; pocetak: string }>,
+  zona: string,
+  samoTajDan: boolean,
+): string {
+  const spisak = termini
+    .slice(0, 5)
+    .map((termin) => {
+      const ko = termin.ime.trim() ? `${termin.ime.trim()}: ` : '';
+      const usluga = termin.usluga ? ` ${termin.usluga.toLocaleLowerCase('bs')}` : '';
+      const broj = termin.kod ? ` — broj ${termin.kod}` : '';
+      return `• ${ko}${opisTermina(termin.pocetak, zona)}${usluga}${broj}`;
+    })
+    .join('\n');
+  const uvod = samoTajDan ? 'Tog dana imate više termina:' : 'Imate više termina:';
+  return `${uvod}\n${spisak}\n\nNapišite broj termina na koji mislite, ili "sve" ako mislite na sve.`;
+}
+
 /** Je li kupac odustao od onoga što je asistent pitao. */
 function jeOdustajanje(tekst: string): boolean {
   const t = tekst
@@ -1540,23 +1591,42 @@ export class ConversationOrchestrator {
     }
 
     const zona = okvir.tenant.timezone;
-    // Broj termina MORA biti u spisku: bez njega kupac nema cime odgovoriti
-    // osim opisom, a opis dva termina istog dana ne razlikuje pouzdano.
-    const spisak = termini
-      .slice(0, 5)
-      .map((termin) => {
-        const ko = termin.ime.trim() ? `${termin.ime.trim()}: ` : '';
-        const usluga = termin.usluga ? ` ${termin.usluga.toLocaleLowerCase('bs')}` : '';
-        const broj = termin.kod ? ` — broj ${termin.kod}` : '';
-        return `• ${ko}${opisTermina(termin.pocetak, zona)}${usluga}${broj}`;
-      })
-      .join('\n');
-    return {
-      vrsta: 'pitanje',
-      tekst:
-        `Imate više termina:\n${spisak}\n\n` +
-        'Napišite broj termina na koji mislite, ili "sve" ako mislite na sve.',
-    };
+
+    // Kupac je rekao DAN, ne broj: "otkazi subotu", "pomjeri onaj u petak".
+    //
+    // Broj termina je pouzdan, ali ga niko ne pamti — a dan pamte svi. Prije
+    // nego se pita za broj, gleda se je li rečeni dan sam po sebi dovoljan.
+    // Ako na taj dan ima tačno jedan termin, nema šta da se pita.
+    //
+    // Kad ih na isti dan ima više, pita se — ali samo za taj dan. Spisak svih
+    // termina bi tu bio buka: kupac je već rekao koji ga dan zanima.
+    const trazeniDan = danIzPoruke(okvir, zona);
+    if (trazeniDan) {
+      const togDana = termini.filter(
+        (termin) => DateTime.fromISO(termin.pocetak, { zone: zona }).toISODate() === trazeniDan,
+      );
+      if (togDana.length === 1) {
+        return {
+          vrsta: 'nadjen',
+          appointmentId: togDana[0].appointmentId,
+          kod: togDana[0].kod,
+          ime: togDana[0].ime,
+          pocetak: togDana[0].pocetak,
+        };
+      }
+      if (togDana.length > 1) {
+        return { vrsta: 'pitanje', tekst: pitanjeZaViseTermina(togDana, zona, true) };
+      }
+      // Nijedan termin tog dana: ne prešućuje se, jer bi inače kupac dobio
+      // spisak svih termina kao da ga nismo ni čuli.
+      return {
+        vrsta: 'pitanje',
+        tekst:
+          `Na ${opisDana(trazeniDan, zona)} ne vidim vaš termin. ` +
+          pitanjeZaViseTermina(termini, zona, false),
+      };
+    }
+    return { vrsta: 'pitanje', tekst: pitanjeZaViseTermina(termini, zona, false) };
   }
 
   /**
