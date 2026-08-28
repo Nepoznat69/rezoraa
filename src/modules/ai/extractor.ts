@@ -58,6 +58,16 @@ termin", "moze li ranije", "prebaci na 14". Ako korisnik trazi termin za jos
 nekoga ili navodi nove usluge, to je new_booking — pomjeranje ne moze uvesti
 drugu osobu ni dodati uslugu.
 
+Kupac koji vec ima termin ne trazi time automatski pomjeranje. Poruka koja
+navodi NOVI dan ili sat, a ne kaze da se postojeci mijenja, jeste new_booking:
+"moze termin u utorak u 10", "jos jedan u petak". Pomjeranje mora POKAZATI na
+postojeci termin — rijecju ("pomjeri", "prebaci", "umjesto", "taj termin") ili
+brojem termina. Sam novi dan i sat na to ne pokazuju.
+
+Ovo vrijedi i kad su prethodne poruke bile o postojecem terminu. Razgovor o
+jednom terminu ne pretvara sljedecu zelju u izmjenu tog termina; kupac koji je
+maloprije nesto otkazivao i dalje smije zakazati novo.
+
 human_handoff je samo izričita molba da razgovara sa osobom: "daj mi čovjeka",
 "hoću sa nekim da pričam", "spoji me sa zaposlenikom". Pitanja o tome ko
 odgovara ("koga sam dobio", "jesi li ti bot", "s kim pričam") NISU human_handoff
