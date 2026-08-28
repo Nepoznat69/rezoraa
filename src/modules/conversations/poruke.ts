@@ -25,6 +25,7 @@ import type {
   RazlogOtkazivanja,
   RazlogTermina,
   SlobodanTermin,
+  TerminKupca,
 } from '../core-api/core-klijent.js';
 
 /** Core nije odgovorio (mreža, rok, 5xx, neispravna konfiguracija). */
@@ -481,4 +482,47 @@ export function porukaZaPotvrduOtkazivanjaVise(
     `Otkazujem sve vaše termine:\n${redovi.join('\n')}\n\n` +
     'Jeste li sigurni? Odgovorite sa "da" ako želite da ih poništim.'
   );
+}
+
+/**
+ * Spisak kupčevih budućih termina.
+ *
+ * ZAŠTO IDE ŠABLONOM, BEZ AI SLOJA
+ *   Ovo je čist ispis činjenica: dan, sat, usluga, broj. AI sloj postoji da
+ *   rečenica zvuči ljudski, ali ovdje nema šta da se ublaži — a svaki njegov
+ *   dodir nosi rizik da neki sat ispadne drugačiji nego što u bazi stoji.
+ *   Kupac koji provjerava termine treba tačnost, ne toplinu.
+ *
+ * ZAŠTO BROJ TERMINA UZ SVAKI
+ *   Bez njega kupac nema čime pokazati na koji misli kad zatraži pomjeranje
+ *   ili otkazivanje — a opis dva termina istog dana ne razlikuje pouzdano.
+ *   Isti razlog zbog kojeg ga ispisuje i `nadjiTerminKupca`.
+ *
+ * ZAŠTO NAJVIŠE PET
+ *   Duža poruka na WhatsAppu se skraćuje i kupac ionako ne čita spisak od
+ *   deset stavki. Ko ih ima više, tome se to i kaže.
+ */
+export function porukaZaMojeTermine(termini: TerminKupca[], vremenskaZona: string): string {
+  if (termini.length === 0) {
+    return (
+      'Na ovaj broj ne vidim nijedan budući termin. ' +
+      'Ako želite da vas upišem, recite mi uslugu i kada vam odgovara.'
+    );
+  }
+
+  const spisak = termini
+    .slice(0, 5)
+    .map((termin) => {
+      const ko = termin.ime.trim() ? `${termin.ime.trim()}: ` : '';
+      const usluga = termin.usluga ? ` — ${termin.usluga.toLocaleLowerCase('bs')}` : '';
+      const broj = termin.kod ? ` (broj ${termin.kod})` : '';
+      return `• ${ko}${opisTermina(termin.pocetak, vremenskaZona)}${usluga}${broj}`;
+    })
+    .join('\n');
+
+  const uvod = termini.length === 1 ? 'Evo vašeg termina:' : 'Evo vaših termina:';
+  const visak =
+    termini.length > 5 ? `\n\nImate ih ukupno ${termini.length}; ovo je prvih pet.` : '';
+
+  return `${uvod}\n${spisak}${visak}\n\nAko nešto treba pomjeriti ili otkazati, recite mi broj termina.`;
 }

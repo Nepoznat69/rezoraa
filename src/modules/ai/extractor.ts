@@ -47,7 +47,16 @@ Tvoj jedini posao je:
 
 Nemaš pristup bazi, kalendaru, Google Sheetsu, n8n alatima niti booking operacijama. Ne smiješ tvrditi da je dostupnost provjerena, rezervacija upisana, potvrđena, promijenjena ili otkazana. Polja missing_fields i ready_for_availability_check su samo prijedlog; backend ih ponovo računa i ne vjeruje im.
 
-Dozvoljeni intenti su: new_booking, check_availability, reschedule_booking, cancel_booking, confirm_booking, human_handoff, general_question, complaint i unknown.
+Dozvoljeni intenti su: new_booking, check_availability, reschedule_booking, cancel_booking, confirm_booking, my_bookings, human_handoff, general_question, complaint i unknown.
+
+my_bookings je pitanje ŠTA KUPAC IMA zakazano: "koji su moji termini", "kad mi
+je termin", "imam li nesto zakazano", "jesam li narucen", "provjeri moje
+termine". Kupac tu nista ne mijenja i ne trazi novo — samo hoce da vidi.
+
+Ne mijesaj ga sa check_availability: to je pitanje sta je SLOBODNO u salonu
+("imate li mjesta u petak"), a my_bookings je pitanje sta je NJEGOVO. Ako
+poruka trazi promjenu ili otkazivanje, to je reschedule_booking odnosno
+cancel_booking, ne my_bookings.
 
 Pozdrav, zahvala i obican razgovor ("pozdrav", "dobar dan", "hvala", "kako ste")
 su general_question, ne unknown. unknown je samo za poruku iz koje se stvarno ne
@@ -149,7 +158,19 @@ function deterministicFallback(input: ExtractionInput): AiExtraction {
   let intent: AiExtraction['intent'] = 'general_question';
   if (/otka(ži|zi)|otkaz|poništi|ponisti/.test(lower)) intent = 'cancel_booking';
   else if (/pomjeri|pomeri|promijeni termin|drugi termin/.test(lower)) intent = 'reschedule_booking';
-  else if (/potvr(đ|d)ujem|potvrdi/.test(lower)) intent = 'confirm_booking';
+  // Pregled stoji IZA otkazivanja i pomjeranja, a ISPRED zakazivanja.
+  //
+  // Iza radnji jer "otkaži moj termin" sadrži i "moj termin" — kupac koji traži
+  // otkazivanje ne smije dobiti spisak umjesto radnje. Ispred zakazivanja jer
+  // pravilo niže hvata golu riječ "termin", pa bi "koji su moji termini"
+  // završilo kao nova rezervacija i kupac bi bio upitan koju uslugu želi.
+  else if (
+    /moj[ei]?\s+termin|imam li (nesto |nešto )?(zakazano|termin)|kad(a)? mi je termin|jesam li naru/.test(
+      lower,
+    )
+  ) {
+    intent = 'my_bookings';
+  } else if (/potvr(đ|d)ujem|potvrdi/.test(lower)) intent = 'confirm_booking';
   else if (/čovjek|covjek|osoba|zaposlenik|agent uživo|agent uzivo/.test(lower)) intent = 'human_handoff';
   else if (/žalba|zalba|nezadovoljan|problem/.test(lower)) intent = 'complaint';
   else if (/slobodno|dostupno|ima li termin/.test(lower)) intent = 'check_availability';

@@ -80,6 +80,7 @@ import {
   type ZeljenoVrijeme,
   porukaZaGrupu,
   type ClanZaPotvrdu,
+  porukaZaMojeTermine,
   porukaZaOdbijenTermin,
   RAZLOZI_BEZ_ALTERNATIVA,
   porukaZaOdbijenoOtkazivanje,
@@ -750,6 +751,12 @@ export class ConversationOrchestrator {
           extraction.reply || 'Molim vas napišite šta vas zanima o našim uslugama.',
         );
 
+      // Pregled ne dira nijedan termin, pa ne zavisi ni od jednog prekidača:
+      // salon koji je isključio zakazivanje i dalje želi da kupac zna kad mu
+      // je termin.
+      case 'my_bookings':
+        return this.mojiTermini(okvir);
+
       case 'cancel_booking':
         return smije.smijeOtkazati ? this.otkazi(okvir) : this.predajCovjeku(okvir);
 
@@ -933,6 +940,38 @@ export class ConversationOrchestrator {
       });
     }
     return odgovor(okvir, PORUKA_PREUZEO_COVJEK, { handoff: true });
+  }
+
+  // -------------------------------------------------------------------------
+  // Pregled vlastitih termina
+  // -------------------------------------------------------------------------
+
+  /**
+   * Kupac pita šta ima zakazano.
+   *
+   * Jedina radnja koja ne dira nijedan termin, pa nema ni prekidača u
+   * postavkama ni potvrde — čitanje vlastitog rasporeda ne može ništa
+   * pokvariti, a kupac koji ne zna kad mu je termin ionako zove salon.
+   *
+   * Traži se po BROJU sa kojeg poruka stiže, nikad po imenu koje je kupac
+   * napisao: ime se može napisati bilo kako i bilo čije, a broj je onaj kojim
+   * ga Core prepoznaje (`phone_key`, migracija 0019). Zato ovim putem niko ne
+   * može vidjeti tuđe termine.
+   *
+   * Ide šablonom, bez AI sloja: spisak sati i brojeva termina mora biti tačan,
+   * a tu nema šta da se ublažava.
+   */
+  private async mojiTermini(okvir: Okvir): Promise<OrchestrationResult> {
+    const ishod = await nadolazeciTermini(okvir.businessId, okvir.message.customer_phone);
+    if (!ishod.ok) {
+      logger.warn('Pregled termina nije dohvaćen iz Corea.', {
+        business_id: okvir.businessId,
+        conversation_id: okvir.conversationId,
+        vrsta: ishod.vrsta,
+      });
+      return odgovor(okvir, PORUKA_CORE_NEDOSTUPAN);
+    }
+    return odgovor(okvir, porukaZaMojeTermine(ishod.termini, okvir.tenant.timezone));
   }
 
   // -------------------------------------------------------------------------

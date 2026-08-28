@@ -6,6 +6,10 @@ export const intentValues = [
   'reschedule_booking',
   'cancel_booking',
   'confirm_booking',
+  // Kupac pita ŠTA IMA zakazano, ne mijenja ništa. Odvojen od pomjeranja i
+  // otkazivanja jer je jedini među njima koji ne dira nijedan termin — pa
+  // ne traži ni dozvolu vlasnika ni potvrdu kupca.
+  'my_bookings',
   'human_handoff',
   'general_question',
   'complaint',
