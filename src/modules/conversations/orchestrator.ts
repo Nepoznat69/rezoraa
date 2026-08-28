@@ -371,7 +371,10 @@ function pitanjeZaViseTermina(
     })
     .join('\n');
   const uvod = samoTajDan ? 'Tog dana imate više termina:' : 'Imate više termina:';
-  return `${uvod}\n${spisak}\n\nNapišite broj termina na koji mislite, ili "sve" ako mislite na sve.`;
+  // Kad je dan već poznat i nije razriješio, nema smisla nuditi ga ponovo —
+  // preostaje samo broj. Kad dana nije ni bilo, oboje vodi do cilja.
+  const cime = samoTajDan ? 'Napišite broj termina' : 'Napišite broj termina ili dan';
+  return `${uvod}\n${spisak}\n\n${cime} na koji mislite, ili "sve" ako mislite na sve.`;
 }
 
 /** Je li kupac odustao od onoga što je asistent pitao. */

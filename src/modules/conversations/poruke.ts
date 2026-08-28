@@ -524,5 +524,7 @@ export function porukaZaMojeTermine(termini: TerminKupca[], vremenskaZona: strin
   const visak =
     termini.length > 5 ? `\n\nImate ih ukupno ${termini.length}; ovo je prvih pet.` : '';
 
-  return `${uvod}\n${spisak}${visak}\n\nAko nešto treba pomjeriti ili otkazati, recite mi broj termina.`;
+  // "ili dan": broj je pouzdan ali ga niko ne pamti, a dan pamte svi. Otkazivanje
+  // i pomjeranje prihvataju oboje, pa se kupcu i nude oboje.
+  return `${uvod}\n${spisak}${visak}\n\nAko nešto treba pomjeriti ili otkazati, recite mi broj termina ili dan.`;
 }

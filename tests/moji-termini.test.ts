@@ -74,9 +74,11 @@ describe('poruka sa pregledom termina', () => {
     expect(tekst).toContain('ukupno 8');
   });
 
-  it('uputi kupca šta dalje može', () => {
+  it('uputi kupca šta dalje može, i to na oba načina', () => {
     const tekst = porukaZaMojeTermine([termin('6SHX9A', '2026-08-29T14:15:00.000Z')], ZONA);
     expect(tekst).toMatch(/pomjeriti ili otkazati/i);
+    // Broj je pouzdan ali ga niko ne pamti; dan pamte svi, i oboje prolazi.
+    expect(tekst).toContain('broj termina ili dan');
   });
 });
 

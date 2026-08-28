@@ -519,6 +519,9 @@ describe('kupac pokazuje na termin danom', () => {
 
     const odgovor = razgovor.zadnjiOdgovor();
     expect(odgovor).toContain('Tog dana imate više termina');
+    // Dan je već rečen i nije razriješio, pa se ne nudi ponovo — traži se broj.
+    expect(odgovor).toContain('Napišite broj termina na koji');
+    expect(odgovor).not.toContain('broj termina ili dan');
     expect(odgovor).toContain('10:00');
     expect(odgovor).toContain('15:00');
     // Termin drugog dana se ne spominje: kupac je već rekao koji dan misli.
